@@ -33,4 +33,15 @@ export default defineConfig({
 
   // File types to support raw imports. Never add .css, .tsx, or .ts files to this.
   assetsInclude: ['**/*.svg', '**/*.csv'],
+
+  // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
+  // 1. prevent vite from obscuring rust errors
+  clearScreen: false,
+  // 2. tauri expects a fixed port, fail if that port is not available
+  server: {
+    port: 1420,
+    strictPort: true,
+  },
+  // 3. to make use of `TAURI_DEBUG` and other env variables
+  envPrefix: ['VITE_', 'TAURI_'],
 })

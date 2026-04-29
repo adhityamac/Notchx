@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { DynamicIsland, IslandState } from './components/DynamicIsland';
 import { Play, Timer, Phone, Bell, MonitorStop, GripHorizontal, X, Wifi, Battery, Volume2, Search, LayoutGrid, Folder, Globe, BatteryCharging, Download, Bluetooth, Focus, Maximize, MonitorSmartphone, Camera, Mic, Copy, Type, Layers, Share2, PanelTopClose } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { listen } from '@tauri-apps/api/event';
 
 export default function App() {
   const [islandState, setIslandState] = useState<IslandState>('idle');
@@ -19,6 +20,7 @@ export default function App() {
   const [copiedText, setCopiedText] = useState("");
   const [volumeLevel, setVolumeLevel] = useState(50);
   const [isHovering, setIsHovering] = useState(false);
+  const [actualBattery, setActualBattery] = useState(100);
 
   // Background image
   const wallpaperUrl = "https://images.unsplash.com/photo-1726383222152-134ad0536b76?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHx3aW5kb3dzJTIwMTElMjBkZXNrdG9wJTIwd2FsbHBhcGVyJTIwYWJzdHJhY3R8ZW58MXx8fHwxNzc3MzU3NzIzfDA&ixlib=rb-4.1.0&q=80&w=1920";
@@ -33,6 +35,38 @@ export default function App() {
     setIslandState(newState);
     if (newState !== 'music') setIsExpanded(false);
   };
+
+  // Connect to Real Windows OS events
+  useEffect(() => {
+    // Only run if we are inside the Tauri desktop app
+    if (!window.__TAURI__) return;
+
+    let prevCharging = false;
+
+    const setupListener = async () => {
+      const unlisten = await listen('battery-stats', (event: any) => {
+        const { percentage, is_charging } = event.payload;
+        setActualBattery(Math.round(percentage));
+
+        // When plugged in (changes from false to true)
+        if (is_charging && !prevCharging) {
+          changeState('battery');
+          // Hide it automatically after 3.5 seconds
+          setTimeout(() => changeState('idle'), 3500);
+        }
+        
+        prevCharging = is_charging;
+      });
+      return unlisten;
+    };
+
+    let unlistenFn: () => void;
+    setupListener().then(fn => { unlistenFn = fn; });
+
+    return () => {
+      if (unlistenFn) unlistenFn();
+    };
+  }, []);
 
   // Feature 9: Hover to Peek
   useEffect(() => {
@@ -60,69 +94,91 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [islandState]);
 
-  // Feature 17: Volume Keys (Simulate with ArrowUp/ArrowDown when idle)
+  // Feature 17: Volume Keys & Media Keys (Real OS integration)
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (islandState === 'idle' || islandState === 'volume') {
-        if (e.key === 'ArrowUp') {
-          setVolumeLevel(v => Math.min(100, v + 10));
-          changeState('volume');
-          clearTimeout((window as any).volTimeout);
-          (window as any).volTimeout = setTimeout(() => changeState('idle'), 1500);
+    if (!window.__TAURI__) return;
+
+    let unlistenFn: () => void;
+
+    const setupListener = async () => {
+      const unlisten = await listen('media-key', (event: any) => {
+        const key = event.payload;
+        
+        if (key === 'volume-up' || key === 'volume-down' || key === 'volume-mute') {
+          // Update simulated volume bar
+          setVolumeLevel(v => {
+             if (key === 'volume-up') return Math.min(100, v + 5);
+             if (key === 'volume-down') return Math.max(0, v - 5);
+             return 0; // mute
+          });
+          
+          setIslandState(current => {
+            if (current !== 'music') {
+               changeState('volume');
+               clearTimeout((window as any).volTimeout);
+               (window as any).volTimeout = setTimeout(() => changeState('idle'), 1500);
+            }
+            return current; // if music is open, don't interrupt it, just let volume update in background
+          });
         }
-        if (e.key === 'ArrowDown') {
-          setVolumeLevel(v => Math.max(0, v - 10));
-          changeState('volume');
-          clearTimeout((window as any).volTimeout);
-          (window as any).volTimeout = setTimeout(() => changeState('idle'), 1500);
+        
+        if (key === 'play-pause') {
+          setIslandState(current => {
+            if (current === 'music') {
+               changeState('idle'); // stop music
+            } else {
+               changeState('music'); // start music
+            }
+            return current;
+          });
         }
-      }
+      });
+      return unlisten;
     };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [islandState]);
+
+    setupListener().then(fn => { unlistenFn = fn; });
+
+    return () => {
+      if (unlistenFn) unlistenFn();
+    };
+  }, []);
 
   return (
     <div 
       ref={constraintsRef}
-      className={`relative w-full h-screen overflow-hidden flex flex-col font-sans selection:bg-blue-500/30 transition-all duration-700 ${focusMode ? 'grayscale-[20%]' : ''}`}
-      style={{ backgroundImage: `url(${wallpaperUrl})`, backgroundSize: 'cover', backgroundPosition: 'center' }}
+      className={`relative w-full h-screen overflow-hidden flex flex-col font-sans transition-all duration-700 pointer-events-none ${focusMode ? 'grayscale-[20%]' : ''}`}
     >
       {/* Top Bar Area */}
       <AnimatePresence>
         {!isFullscreen && (
           <motion.div 
             initial={{ y: -50 }} animate={{ y: isMaximized ? -5 : 0 }} exit={{ y: -100 }} transition={{ type: 'spring', damping: 20 }}
-            className={`w-full flex justify-center absolute top-0 z-50 ${dualMonitor ? 'gap-[800px]' : ''}`}
+            className={`w-full flex justify-center absolute top-0 z-50 pointer-events-none ${dualMonitor ? 'gap-[800px]' : ''}`}
           >
             {/* Feature 18: Dual Monitor Sync */}
             {dualMonitor && (
+              <div className="pointer-events-auto">
+                <DynamicIsland 
+                  activeState={islandState} onClick={handleIslandClick} isExpanded={isExpanded} focusMode={focusMode} cameraActive={cameraActive} micActive={micActive} copiedText={copiedText} volumeLevel={volumeLevel} setVolumeLevel={setVolumeLevel} onHoverPeek={setIsHovering}
+                />
+              </div>
+            )}
+            
+            <div className="pointer-events-auto">
               <DynamicIsland 
                 activeState={islandState} onClick={handleIslandClick} isExpanded={isExpanded} focusMode={focusMode} cameraActive={cameraActive} micActive={micActive} copiedText={copiedText} volumeLevel={volumeLevel} setVolumeLevel={setVolumeLevel} onHoverPeek={setIsHovering}
               />
-            )}
-            
-            <DynamicIsland 
-              activeState={islandState} onClick={handleIslandClick} isExpanded={isExpanded} focusMode={focusMode} cameraActive={cameraActive} micActive={micActive} copiedText={copiedText} volumeLevel={volumeLevel} setVolumeLevel={setVolumeLevel} onHoverPeek={setIsHovering}
-            />
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
-
-      {/* Feature 12 & 15: Mock area to copy text or drag files */}
-      <div className="absolute left-10 top-20 text-white/50 text-sm">
-        Select this text and press Ctrl+C: <span className="font-bold text-white/80 select-all">Secret_Password_123</span>
-        <br/><br/>
-        Drag a file (or just drag this icon) into the island: 
-        <div draggable className="w-12 h-12 bg-blue-500 rounded flex items-center justify-center text-white mt-2 cursor-grab active:cursor-grabbing"><Folder size={20}/></div>
-      </div>
 
       {/* Draggable Settings Window */}
       {showSettings && (
         <motion.div
           drag dragConstraints={constraintsRef} dragMomentum={false}
           initial={{ x: 100, y: 100, opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}
-          className="absolute z-40 w-[380px] bg-white/70 dark:bg-black/70 backdrop-blur-2xl border border-white/20 dark:border-white/10 rounded-xl shadow-2xl overflow-hidden flex flex-col"
+          className="absolute z-40 w-[380px] bg-white/70 dark:bg-black/70 backdrop-blur-2xl border border-white/20 dark:border-white/10 rounded-xl shadow-2xl overflow-hidden flex flex-col pointer-events-auto"
           style={{ x: 100, y: 100 }}
         >
           <div className="h-10 border-b border-black/5 dark:border-white/5 flex items-center justify-between px-3 cursor-grab active:cursor-grabbing bg-white/30 dark:bg-black/30">
@@ -174,40 +230,7 @@ export default function App() {
           </div>
         </motion.div>
       )}
-
-      {/* Realistic Windows 11 Taskbar */}
-      <div className="absolute bottom-0 w-full h-12 bg-[#F3F3F3]/80 dark:bg-[#202020]/80 backdrop-blur-2xl border-t border-white/20 dark:border-white/5 flex items-center justify-between px-4 z-50">
-        <div className="flex items-center gap-2 text-black/80 dark:text-white/80 hover:bg-black/5 dark:hover:bg-white/5 px-2 py-1 rounded-md transition-colors cursor-pointer">
-          <div className="w-6 h-6 text-yellow-500"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.25a.75.75 0 01.75.75v2.25a.75.75 0 01-1.5 0V3a.75.75 0 01.75-.75zM7.5 12a4.5 4.5 0 119 0 4.5 4.5 0 01-9 0zM18.894 6.166a.75.75 0 00-1.06-1.06l-1.591 1.59a.75.75 0 101.06 1.061l1.591-1.59zM21.75 12a.75.75 0 01-.75.75h-2.25a.75.75 0 010-1.5H21a.75.75 0 01.75.75zM17.834 18.894a.75.75 0 001.06-1.06l-1.59-1.591a.75.75 0 10-1.061 1.06l1.59 1.591zM12 18a.75.75 0 01.75.75V21a.75.75 0 01-1.5 0v-2.25A.75.75 0 0112 18zM7.758 17.303a.75.75 0 00-1.061-1.06l-1.591 1.59a.75.75 0 001.06 1.061l1.591-1.59zM6 12a.75.75 0 01-.75.75H3a.75.75 0 010-1.5h2.25A.75.75 0 016 12zM6.697 7.758a.75.75 0 001.06-1.06l-1.59-1.591a.75.75 0 00-1.061 1.06l1.59 1.591z" /></svg></div>
-          <div className="flex flex-col"><span className="text-[10px] font-medium leading-none">68°F</span><span className="text-[10px] opacity-70 leading-tight">Sunny</span></div>
-        </div>
-        <div className="flex items-center gap-1.5 absolute left-1/2 -translate-x-1/2">
-          <TaskbarIcon icon={<LayoutGrid size={20} className="text-blue-500" />} isActive={false} />
-          <TaskbarIcon icon={<Search size={20} className="text-black/70 dark:text-white/70" />} isActive={false} />
-          <TaskbarIcon icon={<Folder size={20} className="text-yellow-500" />} isActive={false} />
-          <TaskbarIcon icon={<Globe size={20} className="text-blue-400" />} isActive={false} />
-          <div className="w-[1px] h-6 bg-black/10 dark:bg-white/10 mx-1"></div>
-          <TaskbarIcon icon={<div className="w-5 h-5 rounded bg-black flex items-center justify-center"><div className="w-2 h-2 rounded-full bg-white"></div></div>} isActive={showSettings} onClick={() => setShowSettings(!showSettings)}/>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-3 px-3 py-1.5 hover:bg-black/5 dark:hover:bg-white/5 rounded-md transition-colors cursor-pointer text-black/80 dark:text-white/80">
-            <Wifi size={14} /><Volume2 size={14} /><Battery size={14} />
-          </div>
-          <div className="flex flex-col items-end px-2 py-1 hover:bg-black/5 dark:hover:bg-white/5 rounded-md transition-colors cursor-pointer text-black/80 dark:text-white/80">
-            <span className="text-xs font-medium">10:42 AM</span><span className="text-[10px]">4/28/2026</span>
-          </div>
-        </div>
-      </div>
     </div>
-  );
-}
-
-function TaskbarIcon({ icon, isActive, onClick }: { icon: React.ReactNode, isActive: boolean, onClick?: () => void }) {
-  return (
-    <button onClick={onClick} className={`w-10 h-10 rounded-md flex items-center justify-center transition-all relative hover:bg-black/5 dark:hover:bg-white/10 active:scale-95 ${isActive ? 'bg-black/5 dark:bg-white/10' : ''}`}>
-      {icon}
-      {isActive && <div className="absolute bottom-0 w-3 h-0.5 bg-gray-400 dark:bg-gray-300 rounded-full" />}
-    </button>
   );
 }
 

@@ -1,7 +1,7 @@
 
-  # Untitled
+  # notchX
 
-  This is a code bundle for Untitled. The original project is available at https://www.figma.com/design/JOU14dgiSnDckoGLCrFxBH/Untitled.
+  This is a code bundle for notchX. The original project is available at https://www.figma.com/design/JOU14dgiSnDckoGLCrFxBH/notchX.
 
   ## Running the code
 
