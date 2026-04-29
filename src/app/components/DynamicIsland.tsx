@@ -1,9 +1,9 @@
 import { motion, AnimatePresence, useMotionValue, useSpring, useTransform } from 'motion/react';
 import { useState, useEffect, forwardRef, useRef } from 'react';
-import { Phone, PhoneOff, Timer, Bell, Music2, BatteryCharging, Download, Bluetooth, Send, Copy, Share2, Volume2, Mic, Camera } from 'lucide-react';
+import { Phone, PhoneOff, Timer, Bell, Music2, BatteryCharging, Download, Bluetooth, Send, Copy, Share2, Volume2, Mic, Camera, CloudSun, Wind, Droplets, Calendar as CalendarIcon, Video, Wifi, Moon, Sun, SlidersHorizontal, BatteryMedium, BatteryFull, BatteryLow, HardDrive, FileUp, Image as ImageIcon, Save, Edit2, CheckCircle2, Activity, Users, MessageSquare, Mail, Trash2 } from 'lucide-react';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 
-export type IslandState = 'idle' | 'music' | 'timer' | 'call' | 'notification' | 'battery' | 'download' | 'bluetooth' | 'split' | 'progress_edge' | 'copied' | 'shared' | 'volume';
+export type IslandState = 'idle' | 'music' | 'timer' | 'call' | 'notification' | 'battery' | 'download' | 'bluetooth' | 'split' | 'copied' | 'shared' | 'volume' | 'weather' | 'calendar' | 'control_center' | 'dropzone' | 'voice_chat' | 'screenshot' | 'notification_stack' | 'usb_device';
 
 interface DynamicIslandProps {
   activeState: IslandState;
@@ -16,24 +16,41 @@ interface DynamicIslandProps {
   volumeLevel?: number;
   setVolumeLevel?: (vol: number) => void;
   onHoverPeek?: (isHovering: boolean) => void;
+  scaleModifier?: number;
+  yOffset?: number;
+  theme?: 'dark' | 'light';
+  actualBattery?: number;
 }
 
 // Dimensions for the different states
-const stateStyles: Record<IslandState | 'music_expanded', any> = {
+const stateStyles: Record<string, any> = {
   idle: { width: 180, height: 40, borderRadius: 24, top: 12 },
   music: { width: 300, height: 40, borderRadius: 24, top: 12 },
   music_expanded: { width: 380, height: 200, borderRadius: 36, top: 12 },
   timer: { width: 240, height: 40, borderRadius: 24, top: 12 },
   call: { width: 360, height: 84, borderRadius: 36, top: 12 },
-  notification: { width: 360, height: 120, borderRadius: 36, top: 12 }, // Taller for Quick Reply
+  notification: { width: 360, height: 120, borderRadius: 36, top: 12 },
   battery: { width: 220, height: 40, borderRadius: 24, top: 12 },
   download: { width: 280, height: 40, borderRadius: 24, top: 12 },
   bluetooth: { width: 240, height: 40, borderRadius: 24, top: 12 },
-  split: { width: 320, height: 40, borderRadius: 24, top: 12, backgroundColor: 'transparent', boxShadow: 'none', ring: 'none' }, // Wrapper for split
-  progress_edge: { width: '100%', height: 4, borderRadius: 0, top: 0 },
+  split: { width: 320, height: 40, borderRadius: 24, top: 12, backgroundColor: 'transparent', boxShadow: 'none', ring: 'none' },
   copied: { width: 260, height: 40, borderRadius: 24, top: 12 },
   shared: { width: 220, height: 40, borderRadius: 24, top: 12 },
   volume: { width: 240, height: 40, borderRadius: 24, top: 12 },
+  weather: { width: 140, height: 40, borderRadius: 24, top: 12 },
+  weather_expanded: { width: 340, height: 140, borderRadius: 36, top: 12 },
+  calendar: { width: 220, height: 40, borderRadius: 24, top: 12 },
+  calendar_expanded: { width: 320, height: 130, borderRadius: 36, top: 12 },
+  control_center: { width: 320, height: 160, borderRadius: 36, top: 12 },
+  dropzone: { width: 140, height: 40, borderRadius: 24, top: 12 },
+  dropzone_expanded: { width: 320, height: 160, borderRadius: 36, top: 12 },
+  voice_chat: { width: 220, height: 40, borderRadius: 24, top: 12 },
+  voice_chat_expanded: { width: 340, height: 180, borderRadius: 36, top: 12 },
+  screenshot: { width: 240, height: 40, borderRadius: 24, top: 12 },
+  screenshot_expanded: { width: 360, height: 280, borderRadius: 36, top: 12 },
+  notification_stack: { width: 200, height: 40, borderRadius: 24, top: 12 },
+  notification_stack_expanded: { width: 340, height: 260, borderRadius: 36, top: 12 },
+  usb_device: { width: 340, height: 60, borderRadius: 30, top: 12 },
 };
 
 // Subtle glows depending on the active context
@@ -44,30 +61,50 @@ const glowStyles: Record<string, string> = {
   battery: '0px 8px 30px rgba(34,197,94,0.15)',
   bluetooth: '0px 8px 30px rgba(59,130,246,0.2)',
   download: '0px 8px 30px rgba(59,130,246,0.2)',
-  progress_edge: '0px 2px 20px rgba(59,130,246,0.8)',
   volume: '0px 8px 30px rgba(255,255,255,0.1)',
+  weather_expanded: '0px 10px 40px rgba(56,189,248,0.2)',
+  calendar_expanded: '0px 10px 40px rgba(168,85,247,0.2)',
+  control_center: '0px 10px 40px rgba(255,255,255,0.1)',
+  dropzone_expanded: '0px 10px 40px rgba(168,85,247,0.2)',
+  voice_chat: '0px 8px 30px rgba(34,197,94,0.2)',
+  voice_chat_expanded: '0px 10px 40px rgba(34,197,94,0.25)',
+  screenshot_expanded: '0px 10px 40px rgba(56,189,248,0.2)',
+  notification_stack_expanded: '0px 10px 40px rgba(244,63,94,0.2)',
+  usb_device: '0px 10px 30px rgba(255,255,255,0.2)',
   split: 'none',
   default: '0px 10px 30px rgba(0,0,0,0.5)',
 };
 
 const springTransition = {
   type: 'spring',
-  stiffness: 400,
-  damping: 28,
-  mass: 0.9,
+  stiffness: 380,
+  damping: 24,
+  mass: 0.8,
 };
 
 export const DynamicIsland = ({ 
   activeState, onClick, isExpanded, focusMode, 
-  cameraActive, micActive, copiedText, volumeLevel = 50, setVolumeLevel, onHoverPeek 
+  cameraActive, micActive, copiedText, volumeLevel = 50, setVolumeLevel, onHoverPeek,
+  scaleModifier = 1, yOffset = 0, theme = 'dark', actualBattery = 100
 }: DynamicIslandProps) => {
   
-  const currentState = (activeState === 'music' && isExpanded) ? 'music_expanded' : activeState;
+  let currentState = activeState as string;
+  if (isExpanded) {
+    if (activeState === 'music') currentState = 'music_expanded';
+    if (activeState === 'weather') currentState = 'weather_expanded';
+    if (activeState === 'calendar') currentState = 'calendar_expanded';
+    if (activeState === 'dropzone') currentState = 'dropzone_expanded';
+    if (activeState === 'voice_chat') currentState = 'voice_chat_expanded';
+    if (activeState === 'screenshot') currentState = 'screenshot_expanded';
+    if (activeState === 'notification_stack') currentState = 'notification_stack_expanded';
+  }
   
   // Focus Mode shrinks the island slightly and dims glow
   const baseStyle = stateStyles[currentState] || stateStyles.idle;
   const currentGlow = focusMode ? 'none' : (glowStyles[currentState] || glowStyles.default);
   const currentWidth = focusMode && typeof baseStyle.width === 'number' ? baseStyle.width * 0.9 : baseStyle.width;
+  
+  const isLightMode = theme === 'light';
   
   // Feature 4: Cursor Magnetism
   const islandRef = useRef<HTMLDivElement>(null);
@@ -80,7 +117,7 @@ export const DynamicIsland = ({
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
-      if (!islandRef.current || currentState === 'progress_edge') return;
+      if (!islandRef.current) return;
       const rect = islandRef.current.getBoundingClientRect();
       const centerX = rect.left + rect.width / 2;
       const centerY = rect.top + rect.height / 2;
@@ -166,12 +203,12 @@ export const DynamicIsland = ({
         width: currentWidth,
         height: baseStyle.height,
         borderRadius: baseStyle.borderRadius,
-        top: baseStyle.top,
+        top: (baseStyle.top as number) + yOffset,
         boxShadow: isDraggedOver ? '0px 0px 40px rgba(59,130,246,0.6)' : currentGlow,
-        scale: isDraggedOver ? 1.05 : 1
+        scale: (isDraggedOver ? 1.05 : 1) * scaleModifier
       }}
-      whileHover={{ scale: currentState === 'progress_edge' ? 1 : 1.02 }}
-      whileTap={{ scale: currentState === 'progress_edge' ? 1 : 0.98 }}
+      whileHover={{ scale: 1.02 * scaleModifier }}
+      whileTap={{ scale: 0.98 * scaleModifier }}
       transition={springTransition}
       onClick={onClick}
       onMouseEnter={() => onHoverPeek && onHoverPeek(true)}
@@ -187,9 +224,11 @@ export const DynamicIsland = ({
         position: 'absolute'
       }}
       className={`
-        bg-[#000000] backdrop-blur-xl text-white overflow-hidden relative z-50 cursor-pointer mx-auto
-        ${currentState === 'progress_edge' ? '' : 'ring-1 ring-white/10 flex items-center justify-center'}
+        backdrop-blur-xl overflow-hidden relative z-50 cursor-pointer mx-auto
+        ${isLightMode ? 'bg-white/90 text-black' : 'bg-[#000000] text-white'}
+        ring-1 ${isLightMode ? 'ring-black/5' : 'ring-white/10'} flex items-center justify-center
       `}
+      data-tauri-drag-region="true"
     >
       {/* Feature 16: Privacy Indicators */}
       <div className="absolute right-4 top-1/2 -translate-y-1/2 flex gap-1.5 z-50 pointer-events-none">
@@ -203,13 +242,20 @@ export const DynamicIsland = ({
         {activeState === 'timer' && <TimerContent key="timer" />}
         {activeState === 'call' && <CallContent key="call" />}
         {activeState === 'notification' && <NotificationContent key="notification" />}
-        {activeState === 'battery' && <BatteryContent key="battery" />}
+        {activeState === 'battery' && <BatteryContent key="battery" batteryLevel={actualBattery} />}
         {activeState === 'download' && <DownloadContent key="download" />}
         {activeState === 'bluetooth' && <BluetoothContent key="bluetooth" />}
-        {activeState === 'progress_edge' && <ProgressEdgeContent key="progress_edge" />}
         {activeState === 'copied' && <CopiedContent key="copied" text={copiedText} />}
         {activeState === 'shared' && <SharedContent key="shared" />}
         {activeState === 'volume' && <VolumeContent key="volume" level={volumeLevel} />}
+        {activeState === 'weather' && <WeatherContent key="weather" isExpanded={isExpanded} />}
+        {activeState === 'calendar' && <CalendarContent key="calendar" isExpanded={isExpanded} />}
+        {activeState === 'control_center' && <ControlCenterContent key="control_center" />}
+        {activeState === 'dropzone' && <DropzoneContent key="dropzone" isExpanded={isExpanded} />}
+        {activeState === 'voice_chat' && <VoiceChatContent key="voice_chat" isExpanded={isExpanded} />}
+        {activeState === 'screenshot' && <ScreenshotContent key="screenshot" isExpanded={isExpanded} />}
+        {activeState === 'notification_stack' && <NotificationStackContent key="notification_stack" isExpanded={isExpanded} />}
+        {activeState === 'usb_device' && <UsbContent key="usb_device" />}
       </AnimatePresence>
     </motion.div>
   );
@@ -228,7 +274,7 @@ const IdleContent = forwardRef<HTMLDivElement>((props, ref) => (
     {...props}
   >
     {/* Simulate camera lens */}
-    <div className="w-4 h-4 rounded-full bg-white/5 flex items-center justify-center pointer-events-none ml-auto mr-12">
+    <div className="w-4 h-4 rounded-full bg-current opacity-10 flex items-center justify-center pointer-events-none ml-auto mr-12">
       <div className="w-1.5 h-1.5 rounded-full bg-blue-500/20"></div>
     </div>
   </motion.div>
@@ -287,29 +333,29 @@ const MusicContent = forwardRef<HTMLDivElement, { isExpanded?: boolean }>(({ isE
             className="w-16 h-16 rounded-2xl object-cover shadow-md"
           />
           <div className="flex flex-col mt-1">
-            <span className="text-white font-semibold text-lg leading-tight">Midnight City</span>
-            <span className="text-white/60 text-sm">M83</span>
+            <span className="font-semibold text-lg leading-tight">Midnight City</span>
+            <span className="opacity-60 text-sm">M83</span>
           </div>
         </div>
         <div className="flex flex-col gap-2 mt-2">
-          <div className="w-full h-2 bg-white/20 rounded-full overflow-hidden cursor-pointer group relative">
+          <div className="w-full h-2 bg-current opacity-20 rounded-full overflow-hidden cursor-pointer group relative">
              <motion.div 
-               className="h-full bg-white rounded-full group-hover:bg-blue-400 transition-colors" 
+               className="h-full bg-blue-500 rounded-full" 
                initial={{ width: '0%' }} animate={{ width: '45%' }} transition={{ duration: 1 }}
              />
           </div>
-          <div className="flex justify-between text-xs text-white/50 px-1 font-medium">
+          <div className="flex justify-between text-xs opacity-50 px-1 font-medium">
             <span>1:42</span>
             <span>-2:21</span>
           </div>
           <div className="flex items-center justify-center gap-8 mt-1">
-            <button className="text-white/80 hover:text-white transition-transform active:scale-95">
+            <button className="opacity-80 hover:opacity-100 transition-transform active:scale-95">
               <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="19 20 9 12 19 4 19 20"></polygon></svg>
             </button>
-            <button className="text-black bg-white p-3.5 rounded-full hover:scale-105 active:scale-95 transition-all">
+            <button className="text-black bg-white dark:bg-current dark:text-white p-3.5 rounded-full hover:scale-105 active:scale-95 transition-all">
                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>
             </button>
-             <button className="text-white/80 hover:text-white transition-transform active:scale-95">
+             <button className="opacity-80 hover:opacity-100 transition-transform active:scale-95">
               <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="5 4 15 12 5 20 5 4"></polygon></svg>
             </button>
           </div>
@@ -402,7 +448,7 @@ const NotificationContent = forwardRef<HTMLDivElement>((props, ref) => (
   </motion.div>
 ));
 
-const BatteryContent = forwardRef<HTMLDivElement>((props, ref) => (
+const BatteryContent = forwardRef<HTMLDivElement, { batteryLevel: number }>(({ batteryLevel, ...props }, ref) => (
   <motion.div
     ref={ref}
     initial={{ opacity: 0, scale: 0.9 }}
@@ -413,11 +459,19 @@ const BatteryContent = forwardRef<HTMLDivElement>((props, ref) => (
     {...props}
   >
     <div className="flex items-center gap-2">
-      <BatteryCharging size={18} className="text-green-500 animate-pulse" />
-      <span className="text-white/80 text-xs font-medium uppercase tracking-widest">Charging</span>
+      {batteryLevel < 20 ? (
+        <BatteryLow size={18} className="text-red-500 animate-pulse" />
+      ) : batteryLevel < 90 ? (
+        <BatteryMedium size={18} className="text-yellow-500" />
+      ) : (
+        <BatteryFull size={18} className="text-green-500" />
+      )}
+      <span className="text-white/80 text-xs font-medium uppercase tracking-widest">
+        {batteryLevel === 100 ? 'Charged' : 'Battery'}
+      </span>
     </div>
-    <div className="text-green-500 font-semibold text-sm">
-      68%
+    <div className={`${batteryLevel < 20 ? 'text-red-500' : batteryLevel < 90 ? 'text-yellow-500' : 'text-green-500'} font-semibold text-sm`}>
+      {batteryLevel}%
     </div>
   </motion.div>
 ));
@@ -464,17 +518,6 @@ const BluetoothContent = forwardRef<HTMLDivElement>((props, ref) => (
   </motion.div>
 ));
 
-// Feature 13: Progress Bar Edge
-const ProgressEdgeContent = forwardRef<HTMLDivElement>((props, ref) => (
-  <motion.div ref={ref} className="w-full h-full bg-blue-500 relative overflow-hidden" {...props}>
-    <motion.div 
-      className="absolute top-0 left-0 h-full bg-white/40"
-      initial={{ width: '0%' }} animate={{ width: '100%' }}
-      transition={{ duration: 3, ease: 'linear', repeat: Infinity }}
-    />
-  </motion.div>
-));
-
 // Feature 15: Clipboard History
 const CopiedContent = forwardRef<HTMLDivElement, { text?: string }>(({ text, ...props }, ref) => (
   <motion.div ref={ref} initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }} className="w-full h-full flex items-center justify-center gap-2 px-4" {...props}>
@@ -494,9 +537,307 @@ const SharedContent = forwardRef<HTMLDivElement>((props, ref) => (
 // Feature 17: Volume Scrubber
 const VolumeContent = forwardRef<HTMLDivElement, { level: number }>(({ level, ...props }, ref) => (
   <motion.div ref={ref} initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }} className="w-full h-full flex items-center px-4 gap-3" {...props}>
-    <Volume2 size={16} className="text-white shrink-0" />
-    <div className="flex-1 h-2 bg-white/20 rounded-full overflow-hidden">
-      <motion.div className="h-full bg-white rounded-full" animate={{ width: `${level}%` }} transition={{ type: 'spring', stiffness: 300, damping: 30 }} />
+    <Volume2 size={16} className="shrink-0" />
+    <div className="flex-1 h-2 bg-current opacity-20 rounded-full overflow-hidden">
+      <motion.div className="h-full bg-current opacity-100 rounded-full" animate={{ width: `${level}%` }} transition={{ type: 'spring', stiffness: 300, damping: 30 }} />
     </div>
+  </motion.div>
+));
+
+const WeatherContent = forwardRef<HTMLDivElement, { isExpanded?: boolean }>(({ isExpanded, ...props }, ref) => (
+  <motion.div
+    ref={ref}
+    initial={{ opacity: 0, y: -10 }}
+    animate={{ opacity: 1, y: 0 }}
+    exit={{ opacity: 0, y: -10 }}
+    transition={{ duration: 0.3 }}
+    className="w-full h-full flex flex-col justify-between px-5 py-4 absolute inset-0"
+    {...props}
+  >
+    {/* Compact View */}
+    <motion.div animate={{ opacity: isExpanded ? 0 : 1 }} style={{ pointerEvents: isExpanded ? 'none' : 'auto' }} className="w-full h-full flex items-center justify-between absolute inset-0 px-4">
+      <div className="flex items-center gap-2">
+        <CloudSun size={18} className="text-sky-400" />
+        <span className="font-semibold text-sm tracking-wide">72° Partly Cloudy</span>
+      </div>
+    </motion.div>
+
+    {/* Expanded View */}
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: isExpanded ? 1 : 0 }} style={{ pointerEvents: isExpanded ? 'auto' : 'none' }} className="absolute inset-0 p-5 flex flex-col justify-between">
+      <div className="flex justify-between items-start">
+        <div className="flex flex-col">
+          <span className="font-semibold text-lg leading-tight">San Francisco</span>
+          <span className="opacity-60 text-sm">72° Partly Cloudy</span>
+        </div>
+        <div className="flex items-center justify-center w-12 h-12 bg-sky-500/20 rounded-full">
+          <CloudSun size={24} className="text-sky-400" />
+        </div>
+      </div>
+      
+      <div className="flex gap-4 mt-auto">
+        <div className="flex flex-col gap-1 flex-1">
+          <span className="text-[10px] uppercase font-bold opacity-40 tracking-wider">Wind</span>
+          <div className="flex items-center gap-1.5"><Wind size={12} className="opacity-80"/> <span className="text-xs font-medium">12 mph</span></div>
+        </div>
+        <div className="flex flex-col gap-1 flex-1">
+          <span className="text-[10px] uppercase font-bold opacity-40 tracking-wider">Humidity</span>
+          <div className="flex items-center gap-1.5"><Droplets size={12} className="text-sky-400"/> <span className="text-xs font-medium">45%</span></div>
+        </div>
+        <div className="flex flex-col gap-1 flex-1">
+          <span className="text-[10px] uppercase font-bold opacity-40 tracking-wider">Precip</span>
+          <div className="flex items-center gap-1.5"><span className="text-xs font-medium">0%</span></div>
+        </div>
+      </div>
+    </motion.div>
+  </motion.div>
+));
+
+const CalendarContent = forwardRef<HTMLDivElement, { isExpanded?: boolean }>(({ isExpanded, ...props }, ref) => (
+  <motion.div ref={ref} className="w-full h-full flex flex-col justify-between absolute inset-0 px-4 py-2" {...props}>
+    {/* Compact View */}
+    <motion.div animate={{ opacity: isExpanded ? 0 : 1 }} style={{ pointerEvents: isExpanded ? 'none' : 'auto' }} className="w-full h-full flex items-center gap-2 absolute inset-0 px-4">
+      <CalendarIcon size={16} className="text-purple-400 shrink-0" />
+      <span className="font-medium text-sm truncate">Design Sync in 5m</span>
+    </motion.div>
+    
+    {/* Expanded View */}
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: isExpanded ? 1 : 0 }} style={{ pointerEvents: isExpanded ? 'auto' : 'none' }} className="absolute inset-0 p-5 flex flex-col">
+      <div className="flex justify-between items-start">
+        <div className="flex flex-col">
+          <h4 className="font-semibold text-base leading-tight">Weekly Design Sync</h4>
+          <p className="text-xs opacity-60 mt-0.5">10:00 AM - 10:30 AM</p>
+        </div>
+        <div className="w-10 h-10 rounded-full bg-purple-500/20 flex items-center justify-center shrink-0">
+          <Video size={18} className="text-purple-400"/>
+        </div>
+      </div>
+      <div className="mt-auto flex gap-2">
+        <button className="flex-1 bg-purple-500 hover:bg-purple-600 text-white rounded-xl py-2 text-sm font-medium transition-colors">
+          Join Microsoft Teams
+        </button>
+      </div>
+    </motion.div>
+  </motion.div>
+));
+
+const ControlCenterContent = forwardRef<HTMLDivElement>((props, ref) => (
+  <motion.div ref={ref} className="w-full h-full p-4 flex flex-col gap-3 absolute inset-0" {...props}>
+    <div className="flex gap-3">
+      {/* WiFi */}
+      <div className="flex-1 bg-white/10 dark:bg-white/10 hover:bg-white/20 rounded-2xl p-3 flex flex-col gap-2 items-center justify-center cursor-pointer transition-colors shadow-inner">
+        <div className="w-8 h-8 rounded-full bg-blue-500 text-white flex items-center justify-center"><Wifi size={16}/></div>
+        <span className="text-[10px] font-semibold tracking-wide">Wi-Fi</span>
+      </div>
+      {/* Bluetooth */}
+      <div className="flex-1 bg-white/10 dark:bg-white/10 hover:bg-white/20 rounded-2xl p-3 flex flex-col gap-2 items-center justify-center cursor-pointer transition-colors shadow-inner">
+        <div className="w-8 h-8 rounded-full bg-blue-500 text-white flex items-center justify-center"><Bluetooth size={16}/></div>
+        <span className="text-[10px] font-semibold tracking-wide">Bluetooth</span>
+      </div>
+      {/* DND */}
+      <div className="flex-1 bg-white/10 dark:bg-white/10 hover:bg-white/20 rounded-2xl p-3 flex flex-col gap-2 items-center justify-center cursor-pointer transition-colors shadow-inner">
+        <div className="w-8 h-8 rounded-full bg-indigo-500 text-white flex items-center justify-center"><Moon size={16}/></div>
+        <span className="text-[10px] font-semibold tracking-wide">Do Not Disturb</span>
+      </div>
+    </div>
+    
+    <div className="bg-white/10 dark:bg-white/10 rounded-2xl p-3 flex items-center gap-3 shadow-inner">
+      <Volume2 size={16} className="opacity-80" />
+      <div className="flex-1 h-2 bg-black/20 dark:bg-white/20 rounded-full overflow-hidden">
+        <div className="w-[70%] h-full bg-blue-500 rounded-full" />
+      </div>
+    </div>
+  </motion.div>
+));
+
+const DropzoneContent = forwardRef<HTMLDivElement, { isExpanded?: boolean }>(({ isExpanded, ...props }, ref) => (
+  <motion.div ref={ref} className="w-full h-full flex flex-col justify-between absolute inset-0 px-4 py-2" {...props}>
+    {/* Compact View */}
+    <motion.div animate={{ opacity: isExpanded ? 0 : 1 }} style={{ pointerEvents: isExpanded ? 'none' : 'auto' }} className="w-full h-full flex items-center justify-between absolute inset-0 px-4">
+      <div className="flex items-center gap-2">
+        <FileUp size={16} className="text-purple-400" />
+        <span className="font-medium text-sm">Drop file here</span>
+      </div>
+    </motion.div>
+    
+    {/* Expanded View */}
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: isExpanded ? 1 : 0 }} style={{ pointerEvents: isExpanded ? 'auto' : 'none' }} className="absolute inset-0 p-4 flex flex-col">
+      <div className="w-full h-full border-2 border-dashed border-purple-500/50 rounded-2xl bg-purple-500/10 flex flex-col items-center justify-center gap-2">
+        <FileUp size={24} className="text-purple-400" />
+        <span className="text-sm font-medium text-purple-200">Ready to copy to Island</span>
+        <span className="text-[10px] text-purple-300/60">Drag any file from Windows</span>
+      </div>
+    </motion.div>
+  </motion.div>
+));
+
+const VoiceChatContent = forwardRef<HTMLDivElement, { isExpanded?: boolean }>(({ isExpanded, ...props }, ref) => (
+  <motion.div ref={ref} className="w-full h-full flex flex-col justify-between absolute inset-0 px-4 py-2" {...props}>
+    {/* Compact View */}
+    <motion.div animate={{ opacity: isExpanded ? 0 : 1 }} style={{ pointerEvents: isExpanded ? 'none' : 'auto' }} className="w-full h-full flex items-center justify-between absolute inset-0 px-4">
+      <div className="flex items-center gap-2">
+        <div className="w-6 h-6 rounded-full bg-green-500/20 flex items-center justify-center relative">
+          <div className="absolute inset-0 rounded-full border border-green-400 animate-ping opacity-50"></div>
+          <Activity size={12} className="text-green-400" />
+        </div>
+        <span className="font-medium text-sm">3 in Voice</span>
+      </div>
+      <div className="flex items-center gap-1">
+        <motion.div animate={{ height: [4, 12, 4] }} transition={{ repeat: Infinity, duration: 0.8 }} className="w-1 bg-green-400 rounded-full" />
+        <motion.div animate={{ height: [8, 16, 8] }} transition={{ repeat: Infinity, duration: 1.2 }} className="w-1 bg-green-400 rounded-full" />
+        <motion.div animate={{ height: [6, 10, 6] }} transition={{ repeat: Infinity, duration: 1.0 }} className="w-1 bg-green-400 rounded-full" />
+      </div>
+    </motion.div>
+    
+    {/* Expanded View */}
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: isExpanded ? 1 : 0 }} style={{ pointerEvents: isExpanded ? 'auto' : 'none' }} className="absolute inset-0 p-5 flex flex-col justify-between">
+      <div className="flex justify-between items-center">
+        <div className="flex items-center gap-2 text-green-400">
+          <Users size={16} />
+          <span className="font-semibold text-sm">Design Channel</span>
+        </div>
+        <div className="flex gap-2">
+          <button className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors"><Mic size={14} /></button>
+          <button className="w-8 h-8 rounded-full bg-red-500/20 hover:bg-red-500/40 text-red-400 flex items-center justify-center transition-colors"><PhoneOff size={14} /></button>
+        </div>
+      </div>
+      <div className="flex gap-3 mt-4">
+        {/* User 1 Speaking */}
+        <div className="flex flex-col items-center gap-1">
+          <div className="w-12 h-12 rounded-full bg-gradient-to-tr from-green-400 to-emerald-600 p-[2px]">
+            <div className="w-full h-full rounded-full bg-black flex items-center justify-center border-2 border-black">
+              <span className="text-xs font-bold text-white">AJ</span>
+            </div>
+          </div>
+          <span className="text-[10px] font-medium opacity-80">Alex</span>
+        </div>
+        {/* User 2 */}
+        <div className="flex flex-col items-center gap-1 opacity-60">
+          <div className="w-12 h-12 rounded-full bg-white/20 p-[2px]">
+            <div className="w-full h-full rounded-full bg-black flex items-center justify-center border-2 border-black">
+              <span className="text-xs font-bold text-white">S</span>
+            </div>
+          </div>
+          <span className="text-[10px] font-medium opacity-80">Sarah</span>
+        </div>
+        {/* User 3 */}
+        <div className="flex flex-col items-center gap-1 opacity-60">
+          <div className="w-12 h-12 rounded-full bg-white/20 p-[2px]">
+            <div className="w-full h-full rounded-full bg-black flex items-center justify-center border-2 border-black">
+              <span className="text-xs font-bold text-white">M</span>
+            </div>
+          </div>
+          <span className="text-[10px] font-medium opacity-80">Mike</span>
+        </div>
+      </div>
+    </motion.div>
+  </motion.div>
+));
+
+const ScreenshotContent = forwardRef<HTMLDivElement, { isExpanded?: boolean }>(({ isExpanded, ...props }, ref) => (
+  <motion.div ref={ref} className="w-full h-full flex flex-col justify-between absolute inset-0 px-4 py-2" {...props}>
+    {/* Compact View */}
+    <motion.div animate={{ opacity: isExpanded ? 0 : 1 }} style={{ pointerEvents: isExpanded ? 'none' : 'auto' }} className="w-full h-full flex items-center justify-between absolute inset-0 px-4">
+      <div className="flex items-center gap-2">
+        <Camera size={16} className="text-sky-400" />
+        <span className="font-medium text-sm">Screenshot saved</span>
+      </div>
+      <div className="w-8 h-6 bg-white/20 rounded border border-white/30" />
+    </motion.div>
+    
+    {/* Expanded View */}
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: isExpanded ? 1 : 0 }} style={{ pointerEvents: isExpanded ? 'auto' : 'none' }} className="absolute inset-0 p-4 flex flex-col gap-3">
+      <div className="flex-1 w-full rounded-xl bg-gradient-to-br from-indigo-500/40 to-purple-500/40 border border-white/10 flex items-center justify-center overflow-hidden">
+        {/* Fake screenshot content */}
+        <div className="w-3/4 h-3/4 bg-black/40 rounded-lg shadow-2xl flex flex-col p-2">
+           <div className="w-full h-2 bg-white/20 rounded mb-2"></div>
+           <div className="w-1/2 h-2 bg-white/10 rounded"></div>
+        </div>
+      </div>
+      <div className="flex gap-2">
+        <button className="flex-1 flex items-center justify-center gap-1.5 bg-white/10 hover:bg-white/20 text-white rounded-xl py-2 text-xs font-medium transition-colors">
+          <Copy size={12}/> Copy
+        </button>
+        <button className="flex-1 flex items-center justify-center gap-1.5 bg-white/10 hover:bg-white/20 text-white rounded-xl py-2 text-xs font-medium transition-colors">
+          <Edit2 size={12}/> Edit
+        </button>
+        <button className="flex-1 flex items-center justify-center gap-1.5 bg-sky-500/20 hover:bg-sky-500/40 text-sky-300 rounded-xl py-2 text-xs font-medium transition-colors">
+          <Save size={12}/> Save
+        </button>
+      </div>
+    </motion.div>
+  </motion.div>
+));
+
+const NotificationStackContent = forwardRef<HTMLDivElement, { isExpanded?: boolean }>(({ isExpanded, ...props }, ref) => (
+  <motion.div ref={ref} className="w-full h-full flex flex-col justify-between absolute inset-0 px-4 py-2" {...props}>
+    {/* Compact View */}
+    <motion.div animate={{ opacity: isExpanded ? 0 : 1 }} style={{ pointerEvents: isExpanded ? 'none' : 'auto' }} className="w-full h-full flex items-center justify-between absolute inset-0 px-4">
+      <div className="flex items-center gap-2">
+        <Bell size={16} className="text-rose-400" />
+        <span className="font-medium text-sm">3 New Notifications</span>
+      </div>
+      <div className="w-5 h-5 rounded-full bg-rose-500 text-white flex items-center justify-center text-[10px] font-bold">
+        3
+      </div>
+    </motion.div>
+    
+    {/* Expanded View */}
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: isExpanded ? 1 : 0 }} style={{ pointerEvents: isExpanded ? 'auto' : 'none' }} className="absolute inset-0 p-4 flex flex-col">
+      <div className="flex justify-between items-center mb-3">
+        <span className="font-semibold text-sm">Recent</span>
+        <button className="text-xs text-white/50 hover:text-white transition-colors">Clear All</button>
+      </div>
+      <div className="flex flex-col gap-2 overflow-hidden">
+        {/* Notification 1 */}
+        <div className="flex items-center gap-3 p-2 bg-white/5 rounded-xl">
+          <div className="w-8 h-8 rounded-full bg-rose-500/20 text-rose-400 flex items-center justify-center shrink-0"><MessageSquare size={14}/></div>
+          <div className="flex flex-col flex-1 overflow-hidden">
+            <span className="text-xs font-bold truncate">Discord - General</span>
+            <span className="text-[10px] opacity-70 truncate">Alex: Let's check the new design!</span>
+          </div>
+        </div>
+        {/* Notification 2 */}
+        <div className="flex items-center gap-3 p-2 bg-white/5 rounded-xl">
+          <div className="w-8 h-8 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center shrink-0"><Mail size={14}/></div>
+          <div className="flex flex-col flex-1 overflow-hidden">
+            <span className="text-xs font-bold truncate">Linear</span>
+            <span className="text-[10px] opacity-70 truncate">Issue #402 assigned to you</span>
+          </div>
+        </div>
+        {/* Notification 3 */}
+        <div className="flex items-center gap-3 p-2 bg-white/5 rounded-xl">
+          <div className="w-8 h-8 rounded-full bg-green-500/20 text-green-400 flex items-center justify-center shrink-0"><CheckCircle2 size={14}/></div>
+          <div className="flex flex-col flex-1 overflow-hidden">
+            <span className="text-xs font-bold truncate">System Update</span>
+            <span className="text-[10px] opacity-70 truncate">Windows update complete.</span>
+          </div>
+        </div>
+      </div>
+    </motion.div>
+  </motion.div>
+));
+
+const UsbContent = forwardRef<HTMLDivElement>((props, ref) => (
+  <motion.div
+    ref={ref}
+    initial={{ opacity: 0, scale: 0.9 }}
+    animate={{ opacity: 1, scale: 1 }}
+    exit={{ opacity: 0, scale: 0.9 }}
+    transition={{ duration: 0.2 }}
+    className="w-full h-full flex items-center justify-between px-5 absolute inset-0"
+    {...props}
+  >
+    <div className="flex items-center gap-3">
+      <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center text-white">
+        <HardDrive size={20} />
+      </div>
+      <div className="flex flex-col">
+        <span className="text-sm font-semibold">T7 Shield Connected</span>
+        <span className="text-[10px] text-white/60">Storage (D:) • 1.2 TB Free</span>
+      </div>
+    </div>
+    <button className="px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-xs font-medium transition-colors flex items-center gap-1.5">
+      Eject
+    </button>
   </motion.div>
 ));

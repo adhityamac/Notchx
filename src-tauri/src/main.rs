@@ -17,7 +17,15 @@ fn main() {
     tauri::Builder::default()
         .setup(|app| {
             let app_handle = app.handle();
-            let _window = app.get_window("main").unwrap();
+            let window = app.get_window("main").unwrap();
+            
+            // Auto-center the window to the top edge of any laptop screen
+            if let Ok(Some(monitor)) = window.primary_monitor() {
+                let screen_size = monitor.size();
+                let window_size = window.outer_size().unwrap();
+                let center_x = (screen_size.width as i32 / 2) - (window_size.width as i32 / 2);
+                window.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x: center_x, y: 0 })).unwrap();
+            }
             
             // Background thread to monitor the battery
             let battery_handle = app_handle.clone();

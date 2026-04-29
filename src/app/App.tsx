@@ -1,8 +1,12 @@
 import { useState, useRef, useEffect } from 'react';
 import { DynamicIsland, IslandState } from './components/DynamicIsland';
-import { Play, Timer, Phone, Bell, MonitorStop, GripHorizontal, X, Wifi, Battery, Volume2, Search, LayoutGrid, Folder, Globe, BatteryCharging, Download, Bluetooth, Focus, Maximize, MonitorSmartphone, Camera, Mic, Copy, Type, Layers, Share2, PanelTopClose } from 'lucide-react';
+import { SettingsDashboard } from './components/SettingsDashboard';
+import { Play, Timer, Phone, Bell, MonitorStop, GripHorizontal, X, Wifi, Battery, Volume2, Search, LayoutGrid, Folder, Globe, BatteryCharging, Download, Bluetooth, Focus, Maximize, MonitorSmartphone, Camera, Mic, Copy, Type, Layers, Share2, PanelTopClose, CloudSun, Moon, Sun, SlidersHorizontal, Calendar as CalendarIcon, Video, FileUp, Activity, Camera as CameraIcon, List, HardDrive, Settings } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { listen } from '@tauri-apps/api/event';
+
+// States that support expanding via hover or click
+const EXPANDABLE_STATES = ['music', 'weather', 'calendar', 'control_center', 'dropzone', 'voice_chat', 'screenshot', 'notification_stack'];
 
 export default function App() {
   const [islandState, setIslandState] = useState<IslandState>('idle');
@@ -22,18 +26,30 @@ export default function App() {
   const [isHovering, setIsHovering] = useState(false);
   const [actualBattery, setActualBattery] = useState(100);
 
+  // Customization states
+  const [islandScale, setIslandScale] = useState(1);
+  const [islandOffset, setIslandOffset] = useState(0);
+  const [islandTheme, setIslandTheme] = useState<'dark' | 'light'>('dark');
+  const [showFullSettings, setShowFullSettings] = useState(false);
+
   // Background image
   const wallpaperUrl = "https://images.unsplash.com/photo-1726383222152-134ad0536b76?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHx3aW5kb3dzJTIwMTElMjBkZXNrdG9wJTIwd2FsbHBhcGVyJTIwYWJzdHJhY3R8ZW58MXx8fHwxNzc3MzU3NzIzfDA&ixlib=rb-4.1.0&q=80&w=1920";
 
   const handleIslandClick = () => {
-    if (islandState === 'music') {
+    if (EXPANDABLE_STATES.includes(islandState)) {
       setIsExpanded(!isExpanded);
     }
   };
 
   const changeState = (newState: IslandState) => {
     setIslandState(newState);
-    if (newState !== 'music') setIsExpanded(false);
+    if (!EXPANDABLE_STATES.includes(newState)) {
+      setIsExpanded(false);
+    } else if (newState === 'control_center' || newState === 'screenshot') {
+      setIsExpanded(true); // Always open expanded for these
+    } else {
+      setIsExpanded(false); // Reset expansion for others
+    }
   };
 
   // Connect to Real Windows OS events
@@ -70,12 +86,14 @@ export default function App() {
 
   // Feature 9: Hover to Peek
   useEffect(() => {
-    if (islandState === 'music' && !isExpanded) {
-      if (isHovering) {
+    if (EXPANDABLE_STATES.includes(islandState)) {
+      if (isHovering && !isExpanded) {
         setIsExpanded(true);
+      } else if (!isHovering && isExpanded) {
+        setIsExpanded(false);
       }
     }
-  }, [isHovering, islandState]);
+  }, [isHovering, islandState, isExpanded]);
 
   // Feature 15: Clipboard History (Simulate Ctrl+C)
   useEffect(() => {
@@ -160,13 +178,15 @@ export default function App() {
               <div className="pointer-events-auto">
                 <DynamicIsland 
                   activeState={islandState} onClick={handleIslandClick} isExpanded={isExpanded} focusMode={focusMode} cameraActive={cameraActive} micActive={micActive} copiedText={copiedText} volumeLevel={volumeLevel} setVolumeLevel={setVolumeLevel} onHoverPeek={setIsHovering}
+                  scaleModifier={islandScale} yOffset={islandOffset} theme={islandTheme} actualBattery={actualBattery}
                 />
               </div>
             )}
             
-            <div className="pointer-events-auto">
+            <div className="pointer-events-auto relative">
               <DynamicIsland 
                 activeState={islandState} onClick={handleIslandClick} isExpanded={isExpanded} focusMode={focusMode} cameraActive={cameraActive} micActive={micActive} copiedText={copiedText} volumeLevel={volumeLevel} setVolumeLevel={setVolumeLevel} onHoverPeek={setIsHovering}
+                scaleModifier={islandScale} yOffset={islandOffset} theme={islandTheme} actualBattery={actualBattery}
               />
             </div>
           </motion.div>
@@ -204,10 +224,22 @@ export default function App() {
                 <ControlButton active={islandState === 'download'} onClick={() => changeState('download')} icon={<Download size={14} className="text-blue-500" />} label="Download" />
                 <ControlButton active={islandState === 'bluetooth'} onClick={() => changeState('bluetooth')} icon={<Bluetooth size={14} className="text-blue-500" />} label="Bluetooth" />
                 <ControlButton active={islandState === 'volume'} onClick={() => changeState('volume')} icon={<Volume2 size={14} />} label="Volume UI" />
-                <ControlButton active={islandState === 'progress_edge'} onClick={() => changeState('progress_edge')} icon={<PanelTopClose size={14} />} label="Top Edge Line" />
+                <ControlButton active={islandState === 'weather'} onClick={() => changeState('weather')} icon={<CloudSun size={14} className="text-sky-500" />} label="Weather" />
+                <ControlButton active={islandState === 'calendar'} onClick={() => changeState('calendar')} icon={<CalendarIcon size={14} className="text-purple-500" />} label="Calendar" />
+                <ControlButton active={islandState === 'control_center'} onClick={() => changeState('control_center')} icon={<SlidersHorizontal size={14} className="text-indigo-500" />} label="Control Center" />
+                <ControlButton active={islandState === 'dropzone'} onClick={() => changeState('dropzone')} icon={<FileUp size={14} className="text-purple-400" />} label="Dropzone" />
+                <ControlButton active={islandState === 'voice_chat'} onClick={() => changeState('voice_chat')} icon={<Activity size={14} className="text-green-500" />} label="Voice Chat" />
+                <ControlButton active={islandState === 'screenshot'} onClick={() => changeState('screenshot')} icon={<CameraIcon size={14} className="text-sky-400" />} label="Screenshot" />
+                <ControlButton active={islandState === 'notification_stack'} onClick={() => changeState('notification_stack')} icon={<List size={14} className="text-rose-400" />} label="Notifications" />
+                <ControlButton active={islandState === 'usb_device'} onClick={() => changeState('usb_device')} icon={<HardDrive size={14} className="text-gray-300" />} label="USB Device" />
                 <ControlButton active={islandState === 'split'} onClick={() => changeState('split')} icon={<Layers size={14} />} label="Split Island" />
               </div>
             </div>
+
+            <div className="h-px bg-black/5 dark:bg-white/5 w-full" />
+
+            {/* Customization */}
+            
 
             <div className="h-px bg-black/5 dark:bg-white/5 w-full" />
 
@@ -224,12 +256,26 @@ export default function App() {
                </div>
             </div>
 
-            <p className="text-[11px] text-black/40 dark:text-white/40 italic text-center mt-2">
+            <p className="text-[11px] text-black/40 dark:text-white/40 italic text-center mt-2 mb-2">
               Note: Hover the island to peek. Scroll wheel over the island changes volume.
             </p>
+
+            <button 
+              onClick={() => setShowFullSettings(true)}
+              className="w-full flex items-center justify-center gap-2 py-3 bg-gradient-to-r from-blue-500 to-indigo-500 text-white rounded-xl text-sm font-semibold shadow-lg hover:shadow-xl transition-all hover:scale-[1.02] active:scale-[0.98]"
+            >
+              <Settings size={16} /> Open Complete Dashboard
+            </button>
           </div>
         </motion.div>
       )}
+
+      {/* Full Settings Dashboard */}
+      <AnimatePresence>
+        {showFullSettings && (
+          <SettingsDashboard onClose={() => setShowFullSettings(false)} />
+        )}
+      </AnimatePresence>
     </div>
   );
 }
