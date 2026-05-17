@@ -1,6 +1,6 @@
 import { motion, AnimatePresence, useMotionValue, useSpring } from 'motion/react';
 import { useState, useEffect, forwardRef, useRef } from 'react';
-import { Phone, PhoneOff, Timer, Bell, BatteryCharging, Download, Bluetooth, Send, Copy, Share2, Volume2, Mic, Wind, Droplets, Calendar as CalendarIcon, Video, Wifi, Moon, Sun, Cloud, BatteryMedium, BatteryFull, BatteryLow, FileUp, CheckCircle2, Activity, Users, MessageSquare, Mail, HardDrive } from 'lucide-react';
+import { Phone, PhoneOff, Timer, Bell, BatteryCharging, Download, Bluetooth, Send, Copy, Share2, Volume2, Mic, Wind, Droplets, Calendar as CalendarIcon, Video, Wifi, Moon, Sun, Cloud, BatteryMedium, BatteryFull, BatteryLow, FileUp, CheckCircle2, Activity, Users, MessageSquare, Mail, HardDrive, Shuffle, Repeat } from 'lucide-react';
 import { TrueAudioVisualizer } from './TrueAudioVisualizer';
 
 // ── Liquid-bg helper: maps an island state to its CSS tint modifier ──────────
@@ -35,6 +35,11 @@ export interface DynamicIslandProps {
   designMode?: boolean;
   systemStats?: { cpuUsage: number, ramUsage: number, totalMemStr: string };
   onVolumeScroll?: () => void;
+  weatherData?: { city: string, weather: any } | null;
+  sharedFile?: { name: string, size: string } | null;
+  onToggleNetwork?: (type: 'wifi' | 'bluetooth', state: boolean) => void;
+  mediaData?: any;
+  onMediaControl?: (action: string, payload?: any) => void;
 }
 
 // Bug 1 fix: every state MUST have explicit width + height so Framer Motion
@@ -58,7 +63,7 @@ const stateStyles: Record<string, { width: number; height: number; borderRadius:
   weather_expanded: { width: 340, height: 170, borderRadius: 36, top: 12 },
   calendar: { width: 220, height: 44, borderRadius: 24, top: 12 },
   calendar_expanded: { width: 320, height: 130, borderRadius: 36, top: 12 },
-  control_center: { width: 320, height: 160, borderRadius: 36, top: 12 },
+  control_center: { width: 320, height: 112, borderRadius: 36, top: 12 },
   dropzone: { width: 140, height: 44, borderRadius: 24, top: 12 },
   dropzone_expanded: { width: 320, height: 160, borderRadius: 36, top: 12 },
   voice_chat: { width: 220, height: 44, borderRadius: 24, top: 12 },
@@ -102,7 +107,7 @@ export const DynamicIsland = ({
   activeState, onClick, isExpanded, focusMode,
   cameraActive, micActive, copiedText, volumeLevel = 50, setVolumeLevel, onHoverPeek,
   scaleModifier = 1, yOffset = 0, theme = 'dark', actualBattery = 100, designMode = false,
-  onVolumeScroll, systemStats
+  onVolumeScroll, systemStats, weatherData, sharedFile, onToggleNetwork, mediaData, onMediaControl
 }: DynamicIslandProps) => {
 
   let currentState = activeState as string;
@@ -269,7 +274,7 @@ export const DynamicIsland = ({
 
       <AnimatePresence mode="popLayout">
         {activeState === 'idle' && <IdleContent key="idle" />}
-        {activeState === 'music' && <MusicContent key="music" isExpanded={isExpanded} />}
+        {activeState === 'music' && <MusicContent key="music" isExpanded={isExpanded} media={mediaData} onMediaControl={onMediaControl} />}
         {activeState === 'timer' && <TimerContent key="timer" />}
         {activeState === 'call' && <CallContent key="call" />}
         {activeState === 'notification' && <NotificationContent key="notification" />}
@@ -277,11 +282,11 @@ export const DynamicIsland = ({
         {activeState === 'download' && <DownloadContent key="download" />}
         {activeState === 'device' && <DeviceContent key="device" stats={systemStats} />}
         {activeState === 'copied' && <CopiedContent key="copied" text={copiedText} />}
-        {activeState === 'shared' && <SharedContent key="shared" />}
+        {activeState === 'shared' && <SharedContent key="shared" file={sharedFile} />}
         {activeState === 'volume' && <VolumeContent key="volume" level={volumeLevel} />}
-        {activeState === 'weather' && <WeatherContent key="weather" isExpanded={isExpanded} />}
+        {activeState === 'weather' && <WeatherContent key="weather" isExpanded={isExpanded} data={weatherData} />}
         {activeState === 'calendar' && <CalendarContent key="calendar" isExpanded={isExpanded} />}
-        {activeState === 'control_center' && <ControlCenterContent key="control_center" />}
+        {activeState === 'control_center' && <ControlCenterContent key="control_center" onToggle={onToggleNetwork} />}
         {activeState === 'dropzone' && <DropzoneContent key="dropzone" isExpanded={isExpanded} />}
         {activeState === 'voice_chat' && <VoiceChatContent key="voice_chat" isExpanded={isExpanded} />}
         {activeState === 'notification_stack' && <NotificationStackContent key="notification_stack" isExpanded={isExpanded} />}
@@ -294,26 +299,118 @@ export const DynamicIsland = ({
 
 // Phase 2 fix: all content components use the same enter/exit shape (opacity + scale)
 // so AnimatePresence can tween them cleanly without the pill geometry flickering.
-const IdleContent = forwardRef<HTMLDivElement>((props, ref) => (
-  <motion.div
-    ref={ref}
-    initial={{ opacity: 0, scale: 0.85 }}
-    animate={{ opacity: 1, scale: 1 }}
-    exit={{ opacity: 0, scale: 0.85 }}
-    transition={{ duration: 0.15, ease: 'easeOut' }}
-    className="w-full h-full flex items-center justify-between px-4"
-    {...props}
-  >
-    {/* Camera lens dot */}
-    <div className="w-4 h-4 rounded-full bg-current opacity-[0.08] flex items-center justify-center pointer-events-none ml-auto mr-12">
-      <div className="w-1.5 h-1.5 rounded-full bg-blue-400/30" />
-    </div>
-  </motion.div>
-));
+const IdleContent = forwardRef<HTMLDivElement>((props, ref) => {
+  const [time, setTime] = useState(() => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
 
-// Phase 3: MusicContent with spring-physics tonearm
-const MusicContent = forwardRef<HTMLDivElement, { isExpanded?: boolean }>(({ isExpanded, ...props }, ref) => {
-  const [isPlaying, setIsPlaying] = useState(true);
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  return (
+    <motion.div
+      ref={ref}
+      initial={{ opacity: 0, scale: 0.85 }}
+      animate={{ opacity: 1, scale: 1 }}
+      exit={{ opacity: 0, scale: 0.85 }}
+      transition={{ duration: 0.15, ease: 'easeOut' }}
+      className="w-full h-full flex items-center justify-between px-4 select-none"
+      {...props}
+    >
+      {/* Beautiful Time Display */}
+      <div className="flex items-center gap-1.5 pl-1">
+        <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse shadow-[0_0_8px_#3b82f6]" />
+        <span className="text-xs font-bold tracking-wider text-white/90">{time}</span>
+      </div>
+    </motion.div>
+  );
+});
+
+const MusicContent = forwardRef<HTMLDivElement, { isExpanded?: boolean; media?: any; onMediaControl?: (action: string, payload?: any) => void }>(({ isExpanded, media, onMediaControl, ...props }, ref) => {
+  const [isPlaying, setIsPlaying] = useState(media ? media.playbackStatus === 'Playing' : true);
+  const [isShuffle, setIsShuffle] = useState(media?.isShuffle || false);
+  const [repeatMode, setRepeatMode] = useState<'off' | 'all' | 'one'>(media?.repeatMode === 'Track' ? 'one' : media?.repeatMode === 'List' ? 'all' : 'off');
+  const [progress, setProgress] = useState(media?.duration ? (media.position / media.duration) * 100 : 35); // percentage 0 - 100
+  const [duration, setDuration] = useState(media?.duration || 214);
+
+  useEffect(() => {
+    if (media) {
+      setIsPlaying(media.playbackStatus === 'Playing');
+      if (media.isShuffle !== undefined) setIsShuffle(media.isShuffle);
+      if (media.repeatMode !== undefined) {
+        setRepeatMode(media.repeatMode === 'Track' ? 'one' : media.repeatMode === 'List' ? 'all' : 'off');
+      }
+      if (media.duration && media.position !== undefined) {
+        setDuration(media.duration);
+        setProgress((media.position / media.duration) * 100);
+      }
+    }
+  }, [media]);
+
+  // Fallback simulated progress only if no real duration available
+  useEffect(() => {
+    if (!isPlaying || media?.duration) return;
+    const interval = setInterval(() => {
+      setProgress(p => (p >= 100 ? 0 : p + 0.5));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [isPlaying, media?.duration]);
+
+  const handlePlayPause = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsPlaying(p => !p);
+    if (onMediaControl) onMediaControl('playpause');
+  };
+
+  const handleNext = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setProgress(0);
+    if (onMediaControl) onMediaControl('next');
+  };
+
+  const handlePrev = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setProgress(0);
+    if (onMediaControl) onMediaControl('prev');
+  };
+
+  const handleShuffle = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const nextShuffle = !isShuffle;
+    setIsShuffle(nextShuffle);
+    if (onMediaControl) onMediaControl('shuffle', nextShuffle);
+  };
+
+  const handleRepeat = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const nextRepeat = repeatMode === 'off' ? 'all' : repeatMode === 'all' ? 'one' : 'off';
+    setRepeatMode(nextRepeat);
+    if (onMediaControl) onMediaControl('repeat', nextRepeat);
+  };
+
+  const handleProgressClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+    const rect = e.currentTarget.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const newProgress = Math.max(0, Math.min(100, (clickX / rect.width) * 100));
+    setProgress(newProgress);
+    const targetSeconds = (newProgress / 100) * duration;
+    if (onMediaControl) onMediaControl('seek', targetSeconds);
+  };
+
+  const formatTime = (secs: number) => {
+    const mins = Math.floor(secs / 60);
+    const remainSecs = Math.floor(secs % 60);
+    return `${mins}:${remainSecs < 10 ? '0' : ''}${remainSecs}`;
+  };
+
+  const currentSecs = (progress / 100) * duration;
+  const remainSecs = duration - currentSecs;
+
+  const title = media?.title || 'Midnight City';
+  const artist = media?.artist || 'M83';
 
   return (
     <motion.div
@@ -322,7 +419,7 @@ const MusicContent = forwardRef<HTMLDivElement, { isExpanded?: boolean }>(({ isE
       animate={{ opacity: 1, scale: 1 }}
       exit={{ opacity: 0, scale: 0.9 }}
       transition={{ duration: 0.18, ease: 'easeOut' }}
-      className="w-full h-full flex flex-col justify-between px-3 py-2 absolute inset-0"
+      className="w-full h-full flex flex-col justify-between px-3 py-2 absolute inset-0 select-none"
       {...props}
     >
       {/* Compact View */}
@@ -338,6 +435,10 @@ const MusicContent = forwardRef<HTMLDivElement, { isExpanded?: boolean }>(({ isE
             alt="Album Art"
             className="w-7 h-7 rounded-full object-cover"
           />
+          <div className="flex flex-col overflow-hidden max-w-[120px]">
+            <span className="text-xs font-semibold truncate">{title}</span>
+            <span className="text-[9px] opacity-60 truncate">{artist}</span>
+          </div>
         </div>
         <div className="flex items-center gap-1 h-full pr-6">
           <TrueAudioVisualizer compact maxHeight={16} />
@@ -363,8 +464,7 @@ const MusicContent = forwardRef<HTMLDivElement, { isExpanded?: boolean }>(({ isE
             />
             {/* Tonearm — spring-physics via CSS keyframes defined in theme.css */}
             <div
-              className={`absolute -top-1 -right-3 origin-top-left ${isPlaying ? 'tonearm-playing' : 'tonearm-paused'
-                }`}
+              className={`absolute -top-1 -right-3 origin-top-left ${isPlaying ? 'tonearm-playing' : 'tonearm-paused'}`}
               style={{ transformOrigin: '4px 4px' }}
             >
               <svg width="28" height="48" viewBox="0 0 28 48" fill="none">
@@ -375,46 +475,69 @@ const MusicContent = forwardRef<HTMLDivElement, { isExpanded?: boolean }>(({ isE
             </div>
           </div>
 
-          <div className="flex flex-col mt-1 flex-1">
-            <span className="font-semibold text-base leading-tight tracking-tight">Midnight City</span>
-            <span className="opacity-50 text-xs mt-0.5">M83</span>
+          <div className="flex flex-col mt-1 flex-1 overflow-hidden">
+            <span className="font-semibold text-base leading-tight tracking-tight truncate">{title}</span>
+            <span className="opacity-50 text-xs mt-0.5 truncate">{artist}</span>
           </div>
         </div>
 
         <div className="flex flex-col gap-1.5 mt-1">
-          {/* Progress bar */}
-          <div className="w-full h-1.5 bg-white/15 rounded-full overflow-hidden cursor-pointer">
+          {/* Interactive Progress bar */}
+          <div 
+            onClick={handleProgressClick}
+            className="w-full h-2 bg-white/15 hover:bg-white/20 transition-colors rounded-full overflow-hidden cursor-pointer relative py-0.5 flex items-center"
+          >
             <motion.div
-              className="h-full bg-gradient-to-r from-blue-400 to-blue-500 rounded-full"
-              initial={{ width: '0%' }}
-              animate={{ width: '45%' }}
-              transition={{ duration: 1.2, ease: 'easeOut' }}
+              className="h-full bg-gradient-to-r from-blue-400 to-blue-500 rounded-full relative"
+              style={{ width: `${progress}%` }}
+              transition={{ duration: 0.1 }}
             />
           </div>
           <div className="flex justify-between text-[10px] opacity-40 px-0.5 font-medium">
-            <span>1:42</span><span>-2:21</span>
+            <span>{formatTime(currentSecs)}</span><span>-{formatTime(remainSecs)}</span>
           </div>
 
           {/* Controls */}
-          <div className="flex items-center justify-center gap-7 mt-0.5">
-            <button className="opacity-70 hover:opacity-100 transition-opacity active:scale-90">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" stroke="none">
-                <polygon points="19 20 9 12 19 4 19 20" />
-              </svg>
-            </button>
-            <button
-              onClick={(e) => { e.stopPropagation(); setIsPlaying(p => !p); }}
-              className="bg-white text-black p-3 rounded-full hover:scale-105 active:scale-95 transition-all shadow-[0_0_20px_rgba(255,255,255,0.25)]"
+          <div className="flex items-center justify-between px-1 mt-0.5">
+            {/* Shuffle Button */}
+            <button 
+              onClick={handleShuffle} 
+              className={`p-2 rounded-xl transition-all cursor-pointer ${isShuffle ? 'text-blue-400 bg-blue-500/10 shadow-[0_0_10px_rgba(59,130,246,0.3)]' : 'opacity-50 hover:opacity-100'}`}
             >
-              {isPlaying
-                ? <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="6" y="4" width="4" height="16" /><rect x="14" y="4" width="4" height="16" /></svg>
-                : <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="5 3 19 12 5 21 5 3" /></svg>
-              }
+              <Shuffle size={16} strokeWidth={2.5} />
             </button>
-            <button className="opacity-70 hover:opacity-100 transition-opacity active:scale-90">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" stroke="none">
-                <polygon points="5 4 15 12 5 20 5 4" />
-              </svg>
+
+            <div className="flex items-center gap-6">
+              <button onClick={handlePrev} className="opacity-70 hover:opacity-100 transition-opacity active:scale-90 cursor-pointer">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                  <polygon points="19 20 9 12 19 4 19 20" />
+                </svg>
+              </button>
+              <button
+                onClick={handlePlayPause}
+                className="bg-white text-black p-3 rounded-full hover:scale-105 active:scale-95 transition-all shadow-[0_0_20px_rgba(255,255,255,0.25)] cursor-pointer"
+              >
+                {isPlaying
+                  ? <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="6" y="4" width="4" height="16" /><rect x="14" y="4" width="4" height="16" /></svg>
+                  : <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="5 3 19 12 5 21 5 3" /></svg>
+                }
+              </button>
+              <button onClick={handleNext} className="opacity-70 hover:opacity-100 transition-opacity active:scale-90 cursor-pointer">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                  <polygon points="5 4 15 12 5 20 5 4" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Repeat Button */}
+            <button 
+              onClick={handleRepeat} 
+              className={`p-2 rounded-xl transition-all cursor-pointer relative ${repeatMode !== 'off' ? 'text-blue-400 bg-blue-500/10 shadow-[0_0_10px_rgba(59,130,246,0.3)]' : 'opacity-50 hover:opacity-100'}`}
+            >
+              <Repeat size={16} strokeWidth={2.5} />
+              {repeatMode === 'one' && (
+                <span className="absolute -top-1 -right-1 bg-blue-500 text-white text-[8px] font-bold w-3 h-3 rounded-full flex items-center justify-center shadow-[0_0_5px_#3b82f6]">1</span>
+              )}
             </button>
           </div>
         </div>
@@ -618,12 +741,15 @@ const CopiedContent = forwardRef<HTMLDivElement, { text?: string }>(({ text, ...
 ));
 
 // Feature 12: Drag & Drop Shared
-const SharedContent = forwardRef<HTMLDivElement>((props, ref) => (
-  <motion.div ref={ref} initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }} className="w-full h-full flex items-center justify-center gap-3 px-5" {...props}>
+const SharedContent = forwardRef<HTMLDivElement, { file?: { name: string, size: string } | null }>(({ file, ...props }, ref) => (
+  <motion.div ref={ref} initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }} className="w-full h-full flex items-center gap-3 px-5" {...props}>
     <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-emerald-600 to-green-400 flex items-center justify-center text-white shrink-0 shadow-[0_0_15px_rgba(52,211,153,0.4)] border border-white/10">
       <Share2 size={14} strokeWidth={2.5} />
     </div>
-    <span className="text-emerald-400 font-bold text-sm tracking-wide drop-shadow-[0_0_5px_rgba(52,211,153,0.4)]">File Shared</span>
+    <div className="flex flex-col overflow-hidden">
+      <span className="text-emerald-400 font-bold text-sm tracking-wide drop-shadow-[0_0_5px_rgba(52,211,153,0.4)] truncate">{file ? file.name : 'File Shared'}</span>
+      {file && <span className="text-emerald-400/60 font-semibold text-[10px] tracking-wider uppercase">{file.size}</span>}
+    </div>
   </motion.div>
 ));
 
@@ -637,82 +763,90 @@ const VolumeContent = forwardRef<HTMLDivElement, { level: number }>(({ level, ..
   </motion.div>
 ));
 
-const WeatherContent = forwardRef<HTMLDivElement, { isExpanded?: boolean }>(({ isExpanded, ...props }, ref) => (
-  <motion.div
-    ref={ref}
-    initial={{ opacity: 0, y: -10 }}
-    animate={{ opacity: 1, y: 0 }}
-    exit={{ opacity: 0, y: -10 }}
-    transition={{ duration: 0.3 }}
-    className="w-full h-full flex flex-col justify-between absolute inset-0"
-    {...props}
-  >
-    {/* Compact View */}
-    <motion.div animate={{ opacity: isExpanded ? 0 : 1 }} style={{ pointerEvents: isExpanded ? 'none' : 'auto' }} className="w-full h-full flex items-center justify-between absolute inset-0 px-4">
-      <div className="flex items-center gap-2">
-        <div className="relative w-6 h-6 flex items-center justify-center shrink-0">
-          <Sun size={18} className="text-amber-400 absolute top-0 -right-1 drop-shadow-[0_0_5px_rgba(251,191,36,0.6)]" strokeWidth={2.5} />
-          <Cloud size={16} className="text-white absolute bottom-0 left-0 fill-white drop-shadow-md" strokeWidth={2.5} />
-        </div>
-        <div className="flex flex-col justify-center">
-          <span className="font-bold text-[13px] leading-tight text-white tracking-wide">72°</span>
-          <span className="text-[9px] font-semibold uppercase text-white/60 leading-none tracking-wider">San Fran</span>
-        </div>
-      </div>
-    </motion.div>
+const WeatherContent = forwardRef<HTMLDivElement, { isExpanded?: boolean, data?: { city: string, weather: any } | null }>(({ isExpanded, data, ...props }, ref) => {
+  const temp = data?.weather?.temperature ? Math.round(data.weather.temperature) + '°' : '72°';
+  const city = data?.city || 'San Fran';
+  const cityFull = data?.city || 'San Francisco';
+  const wind = data?.weather?.windspeed ? data.weather.windspeed + ' mph' : '12 mph';
+  const isDay = data?.weather?.is_day ?? 1;
 
-    {/* Expanded View */}
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: isExpanded ? 1 : 0 }} style={{ pointerEvents: isExpanded ? 'auto' : 'none' }} className="absolute inset-0 p-5 flex flex-col">
-      <div className="flex justify-between items-start w-full">
-        <div className="flex flex-col">
-          <span className="text-white/60 text-[11px] font-semibold tracking-widest uppercase mb-0.5">San Francisco</span>
-          <div className="flex items-center gap-3">
-            <span className="text-[56px] font-light text-white tracking-tighter leading-none">72°</span>
-            <div className="flex flex-col justify-center mt-2">
-              <span className="text-white font-medium text-sm tracking-wide">Cloudy</span>
-              <span className="text-white/50 font-medium text-[11px]">H:78° L:54°</span>
+  return (
+    <motion.div
+      ref={ref}
+      initial={{ opacity: 0, y: -10 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -10 }}
+      transition={{ duration: 0.3 }}
+      className="w-full h-full flex flex-col justify-between absolute inset-0"
+      {...props}
+    >
+      {/* Compact View */}
+      <motion.div animate={{ opacity: isExpanded ? 0 : 1 }} style={{ pointerEvents: isExpanded ? 'none' : 'auto' }} className="w-full h-full flex items-center justify-between absolute inset-0 px-4">
+        <div className="flex items-center gap-2">
+          <div className="relative w-6 h-6 flex items-center justify-center shrink-0">
+            {isDay ? <Sun size={18} className="text-amber-400 absolute top-0 -right-1 drop-shadow-[0_0_5px_rgba(251,191,36,0.6)]" strokeWidth={2.5} /> : <Moon size={18} className="text-blue-300 absolute top-0 -right-1 drop-shadow-[0_0_5px_rgba(147,197,253,0.6)]" strokeWidth={2.5} />}
+            <Cloud size={16} className="text-white absolute bottom-0 left-0 fill-white drop-shadow-md" strokeWidth={2.5} />
+          </div>
+          <div className="flex flex-col justify-center">
+            <span className="font-bold text-[13px] leading-tight text-white tracking-wide">{temp}</span>
+            <span className="text-[9px] font-semibold uppercase text-white/60 leading-none tracking-wider">{city.substring(0,8)}</span>
+          </div>
+        </div>
+      </motion.div>
+
+      {/* Expanded View */}
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: isExpanded ? 1 : 0 }} style={{ pointerEvents: isExpanded ? 'auto' : 'none' }} className="absolute inset-0 p-5 flex flex-col">
+        <div className="flex justify-between items-start w-full">
+          <div className="flex flex-col">
+            <span className="text-white/60 text-[11px] font-semibold tracking-widest uppercase mb-0.5 truncate max-w-[120px]">{cityFull}</span>
+            <div className="flex items-center gap-3">
+              <span className="text-[56px] font-light text-white tracking-tighter leading-none">{temp}</span>
+              <div className="flex flex-col justify-center mt-2">
+                <span className="text-white font-medium text-sm tracking-wide">{isDay ? 'Clear/Cloudy' : 'Clear Night'}</span>
+                <span className="text-white/50 font-medium text-[11px]">-</span>
+              </div>
             </div>
           </div>
+
+          {/* Animated Icon Group */}
+          <div className="relative w-16 h-16 flex items-center justify-center mr-2">
+            <motion.div
+              animate={{ rotate: 360 }}
+              transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
+              className={`absolute top-0 right-0 w-12 h-12 rounded-full ${isDay ? 'bg-gradient-to-tr from-amber-300 to-orange-400 shadow-[0_0_20px_rgba(251,191,36,0.8)]' : 'bg-gradient-to-tr from-indigo-300 to-blue-500 shadow-[0_0_20px_rgba(99,102,241,0.8)]'}`}
+            />
+            <Cloud size={48} className="text-white absolute bottom-[-4px] left-[-8px] fill-white drop-shadow-2xl" strokeWidth={0} />
+            <Cloud size={32} className="text-white/40 absolute bottom-[-2px] left-[12px] fill-white blur-[2px]" strokeWidth={0} />
+          </div>
         </div>
 
-        {/* Animated Icon Group */}
-        <div className="relative w-16 h-16 flex items-center justify-center mr-2">
-          <motion.div
-            animate={{ rotate: 360 }}
-            transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
-            className="absolute top-0 right-0 w-12 h-12 rounded-full bg-gradient-to-tr from-amber-300 to-orange-400 shadow-[0_0_20px_rgba(251,191,36,0.8)]"
-          />
-          <Cloud size={48} className="text-white absolute bottom-[-4px] left-[-8px] fill-white drop-shadow-2xl" strokeWidth={0} />
-          <Cloud size={32} className="text-white/40 absolute bottom-[-2px] left-[12px] fill-white blur-[2px]" strokeWidth={0} />
-        </div>
-      </div>
-
-      <div className="flex gap-2 mt-auto h-[52px]">
-        <div className="flex flex-col items-center justify-center bg-white/5 hover:bg-white/10 transition-colors rounded-2xl flex-1 border border-white/10 backdrop-blur-md shadow-[inset_0_1px_2px_rgba(255,255,255,0.1)] group cursor-default">
-          <div className="flex items-center gap-1.5 mb-0.5">
-            <Wind size={12} className="text-white/60 group-hover:text-white/80 transition-colors" />
-            <span className="text-[10px] uppercase font-bold text-white/50 tracking-wider">Wind</span>
+        <div className="flex gap-2 mt-auto h-[52px]">
+          <div className="flex flex-col items-center justify-center bg-white/5 hover:bg-white/10 transition-colors rounded-2xl flex-1 border border-white/10 backdrop-blur-md shadow-[inset_0_1px_2px_rgba(255,255,255,0.1)] group cursor-default">
+            <div className="flex items-center gap-1.5 mb-0.5">
+              <Wind size={12} className="text-white/60 group-hover:text-white/80 transition-colors" />
+              <span className="text-[10px] uppercase font-bold text-white/50 tracking-wider">Wind</span>
+            </div>
+            <span className="text-[13px] font-bold text-white tracking-wide">{wind}</span>
           </div>
-          <span className="text-[13px] font-bold text-white tracking-wide">12 mph</span>
-        </div>
-        <div className="flex flex-col items-center justify-center bg-white/5 hover:bg-white/10 transition-colors rounded-2xl flex-1 border border-white/10 backdrop-blur-md shadow-[inset_0_1px_2px_rgba(255,255,255,0.1)] group cursor-default">
-          <div className="flex items-center gap-1.5 mb-0.5">
-            <Droplets size={12} className="text-sky-400/80 group-hover:text-sky-400 transition-colors" />
-            <span className="text-[10px] uppercase font-bold text-white/50 tracking-wider">Humidity</span>
+          <div className="flex flex-col items-center justify-center bg-white/5 hover:bg-white/10 transition-colors rounded-2xl flex-1 border border-white/10 backdrop-blur-md shadow-[inset_0_1px_2px_rgba(255,255,255,0.1)] group cursor-default">
+            <div className="flex items-center gap-1.5 mb-0.5">
+              <Droplets size={12} className="text-sky-400/80 group-hover:text-sky-400 transition-colors" />
+              <span className="text-[10px] uppercase font-bold text-white/50 tracking-wider">Humidity</span>
+            </div>
+            <span className="text-[13px] font-bold text-white tracking-wide">45%</span>
           </div>
-          <span className="text-[13px] font-bold text-white tracking-wide">45%</span>
-        </div>
-        <div className="flex flex-col items-center justify-center bg-white/5 hover:bg-white/10 transition-colors rounded-2xl flex-1 border border-white/10 backdrop-blur-md shadow-[inset_0_1px_2px_rgba(255,255,255,0.1)] group cursor-default">
-          <div className="flex items-center gap-1.5 mb-0.5">
-            <Sun size={12} className="text-amber-400/80 group-hover:text-amber-400 transition-colors" />
-            <span className="text-[10px] uppercase font-bold text-white/50 tracking-wider">UV Index</span>
+          <div className="flex flex-col items-center justify-center bg-white/5 hover:bg-white/10 transition-colors rounded-2xl flex-1 border border-white/10 backdrop-blur-md shadow-[inset_0_1px_2px_rgba(255,255,255,0.1)] group cursor-default">
+            <div className="flex items-center gap-1.5 mb-0.5">
+              <Sun size={12} className="text-amber-400/80 group-hover:text-amber-400 transition-colors" />
+              <span className="text-[10px] uppercase font-bold text-white/50 tracking-wider">UV Index</span>
+            </div>
+            <span className="text-[13px] font-bold text-white tracking-wide">{isDay ? 'High' : 'Low'}</span>
           </div>
-          <span className="text-[13px] font-bold text-white tracking-wide">High</span>
         </div>
-      </div>
+      </motion.div>
     </motion.div>
-  </motion.div>
-));
+  );
+});
 
 const CalendarContent = forwardRef<HTMLDivElement, { isExpanded?: boolean }>(({ isExpanded, ...props }, ref) => (
   <motion.div ref={ref} className="w-full h-full flex flex-col justify-between absolute inset-0 px-4 py-2" {...props}>
@@ -744,34 +878,46 @@ const CalendarContent = forwardRef<HTMLDivElement, { isExpanded?: boolean }>(({ 
   </motion.div>
 ));
 
-const ControlCenterContent = forwardRef<HTMLDivElement>((props, ref) => (
-  <motion.div ref={ref} className="w-full h-full p-4 flex flex-col gap-3 absolute inset-0" {...props}>
-    <div className="flex gap-3 h-[80px]">
-      {/* WiFi */}
-      <div className="flex-1 bg-white/10 hover:bg-white/15 rounded-2xl p-3 flex flex-col gap-2 items-center justify-center cursor-pointer transition-all shadow-[inset_0_1px_2px_rgba(255,255,255,0.1)] border border-white/5 active:scale-95 group">
-        <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-600 to-blue-400 text-white flex items-center justify-center shadow-[0_0_10px_rgba(59,130,246,0.4)] group-hover:scale-105 transition-transform"><Wifi size={14} strokeWidth={2.5} /></div>
-        <span className="text-[10px] font-bold tracking-wide text-white/90">Wi-Fi</span>
-      </div>
-      {/* Bluetooth */}
-      <div className="flex-1 bg-white/10 hover:bg-white/15 rounded-2xl p-3 flex flex-col gap-2 items-center justify-center cursor-pointer transition-all shadow-[inset_0_1px_2px_rgba(255,255,255,0.1)] border border-white/5 active:scale-95 group">
-        <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-600 to-blue-400 text-white flex items-center justify-center shadow-[0_0_10px_rgba(59,130,246,0.4)] group-hover:scale-105 transition-transform"><Bluetooth size={14} strokeWidth={2.5} /></div>
-        <span className="text-[10px] font-bold tracking-wide text-white/90">Bluetooth</span>
-      </div>
-      {/* DND */}
-      <div className="flex-1 bg-white/10 hover:bg-white/15 rounded-2xl p-3 flex flex-col gap-2 items-center justify-center cursor-pointer transition-all shadow-[inset_0_1px_2px_rgba(255,255,255,0.1)] border border-white/5 active:scale-95 group">
-        <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-indigo-600 to-purple-500 text-white flex items-center justify-center shadow-[0_0_10px_rgba(79,70,229,0.4)] group-hover:scale-105 transition-transform"><Moon size={14} strokeWidth={2.5} className="fill-current" /></div>
-        <span className="text-[10px] font-bold tracking-wide text-white/90">DND</span>
-      </div>
-    </div>
+const ControlCenterContent = forwardRef<HTMLDivElement, { onToggle?: (type: 'wifi' | 'bluetooth', state: boolean) => void }>((props, ref) => {
+  const [wifiOn, setWifiOn] = useState(true);
+  const [btOn, setBtOn] = useState(true);
 
-    <div className="bg-white/10 rounded-2xl p-3 flex items-center gap-4 shadow-[inset_0_1px_2px_rgba(255,255,255,0.1)] border border-white/5 h-[44px]">
-      <Volume2 size={16} className="text-white/80 shrink-0" strokeWidth={2.5} />
-      <div className="flex-1 h-2.5 bg-black/40 rounded-full overflow-hidden shadow-inner border border-white/5">
-        <div className="w-[70%] h-full bg-white rounded-full shadow-[0_0_10px_rgba(255,255,255,0.8)]" />
+  const toggleWifi = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const next = !wifiOn;
+    setWifiOn(next);
+    if (props.onToggle) props.onToggle('wifi', next);
+  };
+
+  const toggleBt = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const next = !btOn;
+    setBtOn(next);
+    if (props.onToggle) props.onToggle('bluetooth', next);
+  };
+
+  return (
+    <motion.div ref={ref} className="w-full h-full p-4 flex flex-col absolute inset-0 justify-center" {...props}>
+      <div className="flex gap-3 h-[80px]">
+        {/* WiFi */}
+        <div onClick={toggleWifi} className={`flex-1 ${wifiOn ? 'bg-white/10 hover:bg-white/15' : 'bg-black/20 hover:bg-black/30'} rounded-2xl p-3 flex flex-col gap-2 items-center justify-center cursor-pointer transition-all shadow-[inset_0_1px_2px_rgba(255,255,255,0.1)] border border-white/5 active:scale-95 group`}>
+          <div className={`w-8 h-8 rounded-full ${wifiOn ? 'bg-gradient-to-tr from-blue-600 to-blue-400 text-white shadow-[0_0_10px_rgba(59,130,246,0.4)]' : 'bg-white/10 text-white/50'} flex items-center justify-center group-hover:scale-105 transition-transform`}><Wifi size={14} strokeWidth={2.5} /></div>
+          <span className={`text-[10px] font-bold tracking-wide ${wifiOn ? 'text-white/90' : 'text-white/50'}`}>Wi-Fi</span>
+        </div>
+        {/* Bluetooth */}
+        <div onClick={toggleBt} className={`flex-1 ${btOn ? 'bg-white/10 hover:bg-white/15' : 'bg-black/20 hover:bg-black/30'} rounded-2xl p-3 flex flex-col gap-2 items-center justify-center cursor-pointer transition-all shadow-[inset_0_1px_2px_rgba(255,255,255,0.1)] border border-white/5 active:scale-95 group`}>
+          <div className={`w-8 h-8 rounded-full ${btOn ? 'bg-gradient-to-tr from-blue-600 to-blue-400 text-white shadow-[0_0_10px_rgba(59,130,246,0.4)]' : 'bg-white/10 text-white/50'} flex items-center justify-center group-hover:scale-105 transition-transform`}><Bluetooth size={14} strokeWidth={2.5} /></div>
+          <span className={`text-[10px] font-bold tracking-wide ${btOn ? 'text-white/90' : 'text-white/50'}`}>Bluetooth</span>
+        </div>
+        {/* DND */}
+        <div onClick={(e) => e.stopPropagation()} className="flex-1 bg-white/10 hover:bg-white/15 rounded-2xl p-3 flex flex-col gap-2 items-center justify-center cursor-pointer transition-all shadow-[inset_0_1px_2px_rgba(255,255,255,0.1)] border border-white/5 active:scale-95 group">
+          <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-indigo-600 to-purple-500 text-white flex items-center justify-center shadow-[0_0_10px_rgba(79,70,229,0.4)] group-hover:scale-105 transition-transform"><Moon size={14} strokeWidth={2.5} className="fill-current" /></div>
+          <span className="text-[10px] font-bold tracking-wide text-white/90">DND</span>
+        </div>
       </div>
-    </div>
-  </motion.div>
-));
+    </motion.div>
+  );
+});
 
 const DropzoneContent = forwardRef<HTMLDivElement, { isExpanded?: boolean }>(({ isExpanded, ...props }, ref) => (
   <motion.div ref={ref} className="w-full h-full flex flex-col justify-between absolute inset-0 px-4 py-2" {...props}>

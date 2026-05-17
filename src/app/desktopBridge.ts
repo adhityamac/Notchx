@@ -46,11 +46,24 @@ export interface DesktopBridge {
   setClickThrough: (on: boolean)                             => Promise<void>;
   updateState:     (payload: any)                            => Promise<void>;
   openSettings:    ()                                        => Promise<void>;
+  getVolume:       ()                                        => Promise<number>;
+  setVolume:       (vol: number)                             => Promise<void>;
   getBattery:      ()                                        => Promise<{ percentage: number; is_charging: boolean }>;
+  getWeather:      ()                                        => Promise<{ city: string; weather: any } | null>;
+  toggleNetwork:   (type: 'wifi'|'bluetooth', state: boolean)=> Promise<boolean>;
+  getMediaSessions?: ()                                      => Promise<any>;
+  toggleMediaPlayPause?: ()                                  => Promise<void>;
+  nextMediaTrack?:   ()                                      => Promise<void>;
+  prevMediaTrack?:   ()                                      => Promise<void>;
+  setMediaShuffle?:  (state: boolean)                        => Promise<void>;
+  setMediaRepeat?:   (mode: 'off' | 'one' | 'all')           => Promise<void>;
+  seekMediaTrack?:   (posSeconds: number)                    => Promise<void>;
   onBatteryUpdate:   (cb: (d: { percentage: number; is_charging: boolean }) => void) => () => void;
   onMediaKey:        (cb: (key: string) => void)   => () => void;
+  onMediaUpdate?:    (cb: (m: any) => void)        => () => void;
   onStateChanged:    (cb: (s: any) => void)        => () => void;
   onPositionChanged: (cb: (p: { x: number; y: number }) => void) => () => void;
+  onSystemStats?:    (cb: (stats: any) => void)    => () => void;
 }
 
 export function getDesktopApi(): DesktopBridge | null {

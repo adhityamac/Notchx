@@ -1,6 +1,7 @@
 const { app, BrowserWindow, globalShortcut, ipcMain, powerMonitor, screen } = require('electron');
 const path = require('path');
 const si = require('systeminformation');
+const loudness = require('loudness');
 
 process.stdout.on('error', (e) => { if (e.code !== 'EPIPE') console.error(e); });
 process.stderr.on('error', (e) => { if (e.code !== 'EPIPE') console.error(e); });
@@ -18,7 +19,7 @@ const POLL = 30_000;
 let activePreset = 'top-center';
 
 let notchWindow = null;
-let simWindow = null;
+
 let batteryInterval = null;
 let cachedBattery = { percentage: 100, is_charging: false };
 let clickThrough = false;
@@ -77,7 +78,7 @@ function createNotchWindow() {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
     },
   });
 
@@ -85,32 +86,6 @@ function createNotchWindow() {
   notchWindow.setAlwaysOnTop(true, 'screen-saver');
   notchWindow.loadURL(rendererUrl('notch'));
   notchWindow.on('closed', () => { notchWindow = null; });
-}
-
-// ── Simulator window ──────────────────────────────────────────────────────
-function createSimWindow() {
-  if (simWindow) { simWindow.show(); simWindow.focus(); return; }
-
-  const { bounds } = screen.getPrimaryDisplay();
-  simWindow = new BrowserWindow({
-    width: 320, height: 640,
-    x: bounds.x + bounds.width - 320 - 16,
-    y: bounds.y + 60,
-    title: 'Island Simulator',
-    frame: true,
-    autoHideMenuBar: true,
-    resizable: true,
-    skipTaskbar: false,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.cjs'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: false,
-    },
-  });
-  simWindow.loadURL(rendererUrl('settings'));
-  simWindow.once('ready-to-show', () => simWindow?.show());
-  simWindow.on('closed', () => { simWindow = null; });
 }
 
 // ── Battery ───────────────────────────────────────────────────────────────
@@ -125,9 +100,9 @@ async function readBattery() {
 async function pushBattery() {
   const p = await readBattery();
   cachedBattery = p;
-  [notchWindow, simWindow].forEach(w => {
-    if (w && !w.isDestroyed()) try { w.webContents.send('battery-update', p); } catch { }
-  });
+  if (notchWindow && !notchWindow.isDestroyed()) {
+    try { notchWindow.webContents.send('battery-update', p); } catch { }
+  }
 }
 
 // ── Hardware Monitoring ───────────────────────────────────────────────────
@@ -143,9 +118,9 @@ async function pushSystemStats() {
       totalMemStr: (mem.total / 1024 / 1024 / 1024).toFixed(1) + 'GB'
     };
     
-    [notchWindow, simWindow].forEach(w => {
-      if (w && !w.isDestroyed()) try { w.webContents.send('system-stats-update', stats); } catch { }
-    });
+    if (notchWindow && !notchWindow.isDestroyed()) {
+      try { notchWindow.webContents.send('system-stats-update', stats); } catch { }
+    }
   } catch(e) {}
 }
 
@@ -163,26 +138,16 @@ function registerShortcuts() {
       });
     } catch { }
   });
-
-  try {
-    globalShortcut.register('Control+Shift+I', () => {
-      if (!simWindow || simWindow.isDestroyed()) createSimWindow();
-      else if (simWindow.isFocused()) simWindow.hide();
-      else { simWindow.show(); simWindow.focus(); }
-    });
-    safeLog('[Main] Ctrl+Shift+I → Toggle Simulator');
-  } catch (e) { safeLog('[Main] Shortcut failed:', e.message); }
 }
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) { app.quit(); }
 else {
-  app.on('second-instance', () => { simWindow ? simWindow.focus() : createSimWindow(); });
+  app.on('second-instance', () => { });
 
   app.whenReady().then(() => {
     createNotchWindow();
-    createSimWindow();
     registerShortcuts();
     pushBattery();
     batteryInterval = setInterval(pushBattery, POLL);
@@ -191,6 +156,7 @@ else {
     
     hardwareInterval = setInterval(pushSystemStats, 2000);
     pushSystemStats();
+    startMediaMonitor();
   });
 }
 
@@ -201,6 +167,7 @@ app.on('will-quit', () => {
   globalShortcut.unregisterAll();
   clearInterval(batteryInterval);
   clearInterval(hardwareInterval);
+  if (mediaMonitorProcess) mediaMonitorProcess.kill();
 });
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
@@ -248,8 +215,8 @@ ipcMain.handle('overlay:resize', (_e, size) => {
 
   // Accept the frontend values directly — no artificial floor of IDLE_W that would
   // over-widen small-pill states. Only guard against garbage (< 100).
-  const w = Math.round(Math.max(Number(size?.width) || IDLE_W, 100));
-  const h = Math.round(Math.max(Number(size?.height) || IDLE_H, 60));
+  const w = Math.round(Number(size?.width) || IDLE_W);
+  const h = Math.round(Number(size?.height) || IDLE_H);
 
   const x = activePreset === 'custom'
     ? notchWindow.getBounds().x
@@ -286,6 +253,197 @@ ipcMain.handle('overlay:setClickThrough', (_e, on) => {
   safeLog(`[Main] click-through: ${clickThrough}`);
 });
 
+// ── volume:get / volume:set ────────────────────────────────────────────────
+ipcMain.handle('volume:get', async () => {
+  try { return await loudness.getVolume(); } catch { return 50; }
+});
+ipcMain.handle('volume:set', async (_e, vol) => {
+  try { await loudness.setVolume(vol); } catch { }
+});
+
+// ── weather:get ───────────────────────────────────────────────────────────
+ipcMain.handle('weather:get', async () => {
+  try {
+    let lat = 37.7749;
+    let lon = -122.4194;
+    let city = 'San Francisco';
+
+    try {
+      const locRes = await fetch('https://ip-api.com/json/');
+      if (locRes.ok) {
+        const loc = await locRes.json();
+        if (loc.lat && loc.lon) {
+          lat = loc.lat;
+          lon = loc.lon;
+          city = loc.city || city;
+        }
+      }
+    } catch (e) {
+      console.error('IP Geolocation error, using default location.');
+    }
+
+    const weatherRes = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true&temperature_unit=fahrenheit&windspeed_unit=mph`);
+    if (!weatherRes.ok) return null;
+    const weather = await weatherRes.json();
+    return { city, weather: weather.current_weather };
+  } catch (e) {
+    console.error('Weather fetch error:', e);
+    return null;
+  }
+});
+
+// ── network:toggle ────────────────────────────────────────────────────────
+ipcMain.handle('network:toggle', async (_e, { type, state }) => {
+  // state is boolean: true=enable, false=disable
+  const { exec } = require('child_process');
+  const action = state ? 'enable' : 'disable';
+
+  return new Promise((resolve) => {
+    if (type === 'wifi') {
+      // Strictly control the command to avoid injection
+      const cmd = `powershell -Command "Start-Process powershell -ArgumentList '-NoProfile -ExecutionPolicy Bypass -Command \\"netsh interface set interface \\\\\\"Wi-Fi\\\\\\" admin=${action}\\"' -Verb RunAs -WindowStyle Hidden"`;
+      exec(cmd, (err) => { resolve(!err); });
+    } else if (type === 'bluetooth') {
+      const psState = state ? 'On' : 'Off';
+      // Windows 10/11 Bluetooth toggle via Powershell using BthRadios
+      const cmd = `powershell -Command "
+        [cmdletbinding()]
+        Param()
+        Add-Type -AssemblyName System.Runtime.WindowsRuntime
+        $asq = [Windows.Devices.Radios.Radio,Windows.System.Devices,ContentType=WindowsRuntime]
+        $radios = $asq::GetRadiosAsync().GetResults()
+        $bt = $radios | ? { $_.Kind -eq 'Bluetooth' }
+        if($bt) { $bt.SetStateAsync('${psState}').GetResults() }
+      "`;
+      exec(cmd, (err) => { resolve(!err); });
+    } else {
+      resolve(false);
+    }
+  });
+});
+
+// ── Media SMTC controls ───────────────────────────────────────────────────
+let winMedia = null;
+import('win-media-control').then(m => { winMedia = m; }).catch(() => {});
+
+let latestMediaData = null;
+let mediaMonitorProcess = null;
+
+function startMediaMonitor() {
+  const { spawn } = require('child_process');
+  const commonPs1 = path.join(__dirname, '../node_modules/win-media-control/scripts/common.ps1');
+  const psScript = `
+    . '${commonPs1}'
+    [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager,Windows.Media,ContentType=WindowsRuntime] | Out-Null
+    $mgr = AwaitAction([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync())
+    $asTaskMedia = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.ToString() -match \\"AsTask.*IAsyncOperation\\" })[0].MakeGenericMethod([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionMediaProperties])
+
+    while ($true) {
+      $session = $mgr.GetCurrentSession()
+      if ($session) {
+        $pb = $session.GetPlaybackInfo()
+        $tl = $session.GetTimelineProperties()
+        $mpTask = $session.TryGetMediaPropertiesAsync()
+        $mediaTask = $asTaskMedia.Invoke($null, @($mpTask))
+        $mediaTask.Wait() | Out-Null
+        $media = $mediaTask.Result
+        $res = @{
+          title = $media.Title
+          artist = $media.Artist
+          playbackStatus = $pb.PlaybackStatus.ToString()
+          repeatMode = $pb.AutoRepeatMode.ToString()
+          isShuffle = $pb.IsShuffleActive
+          position = $tl.Position.TotalSeconds
+          duration = $tl.EndTime.TotalSeconds
+        }
+        $json = ($res | ConvertTo-Json -Compress)
+        Write-Output \\"[[MEDIA_START]]$json[[MEDIA_END]]\\"
+      } else {
+        Write-Output \\"[[MEDIA_START]]null[[MEDIA_END]]\\"
+      }
+      Start-Sleep -Milliseconds 300
+    }
+  `;
+
+  mediaMonitorProcess = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', psScript]);
+
+  let buffer = '';
+  mediaMonitorProcess.stdout.on('data', (data) => {
+    buffer += data.toString();
+    let startIdx;
+    while ((startIdx = buffer.indexOf('[[MEDIA_START]]')) !== -1) {
+      const endIdx = buffer.indexOf('[[MEDIA_END]]', startIdx);
+      if (endIdx !== -1) {
+        const jsonStr = buffer.substring(startIdx + 15, endIdx).trim();
+        buffer = buffer.substring(endIdx + 13);
+        if (jsonStr === 'null') {
+          latestMediaData = null;
+        } else {
+          try {
+            latestMediaData = JSON.parse(jsonStr);
+          } catch (e) {}
+        }
+        if (notchWindow && !notchWindow.isDestroyed()) {
+          notchWindow.webContents.send('media-update', latestMediaData);
+        }
+      } else {
+        break;
+      }
+    }
+  });
+
+  mediaMonitorProcess.stderr.on('data', () => {});
+  mediaMonitorProcess.on('error', () => {});
+}
+
+ipcMain.handle('media:get', async () => {
+  return latestMediaData;
+});
+
+ipcMain.handle('media:playpause', async () => {
+  if (!winMedia) return;
+  try { await winMedia.togglePlayPause(); } catch (e) {}
+});
+
+ipcMain.handle('media:next', async () => {
+  if (!winMedia) return;
+  try { await winMedia.next(); } catch (e) {}
+});
+
+ipcMain.handle('media:prev', async () => {
+  if (!winMedia) return;
+  try { await winMedia.previous(); } catch (e) {}
+});
+
+ipcMain.handle('media:shuffle', async (_e, state) => {
+  const { exec } = require('child_process');
+  const commonPs1 = path.join(__dirname, '../node_modules/win-media-control/scripts/common.ps1');
+  const psBool = state ? '$true' : '$false';
+  const cmd = `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ". '${commonPs1}'; [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager,Windows.Media,ContentType=WindowsRuntime] | Out-Null; $mgr = AwaitAction([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync()); $session = $mgr.GetCurrentSession(); if ($session) { $task = $session.TryChangeShuffleActiveAsync(${psBool}); AwaitBool $task }"`;
+  exec(cmd, () => {});
+});
+
+ipcMain.handle('media:repeat', async (_e, mode) => {
+  const { exec } = require('child_process');
+  const commonPs1 = path.join(__dirname, '../node_modules/win-media-control/scripts/common.ps1');
+  
+  const mapping = { 'off': 'None', 'one': 'Track', 'all': 'List' };
+  const repeatModeStr = mapping[mode] || 'None';
+
+  const cmd = `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ". '${commonPs1}'; [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager,Windows.Media,ContentType=WindowsRuntime] | Out-Null; $mgr = AwaitAction([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync()); $session = $mgr.GetCurrentSession(); if ($session) { $task = $session.TryChangeAutoRepeatModeAsync([Windows.Media.MediaPlaybackAutoRepeatMode]::${repeatModeStr}); AwaitBool $task }"`;
+  exec(cmd, () => {});
+});
+
+ipcMain.handle('media:seek', async (_e, posSeconds) => {
+  const seconds = parseFloat(posSeconds);
+  if (isNaN(seconds)) return;
+
+  const { exec } = require('child_process');
+  const commonPs1 = path.join(__dirname, '../node_modules/win-media-control/scripts/common.ps1');
+  const cmd = `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ". '${commonPs1}'; [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager,Windows.Media,ContentType=WindowsRuntime] | Out-Null; $mgr = AwaitAction([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync()); $session = $mgr.GetCurrentSession(); if ($session) { $task = $session.TryChangePlaybackPositionAsync([TimeSpan]::FromSeconds(${seconds})); AwaitBool $task }"`;
+  exec(cmd, () => {});
+});
+
 // ── state:update (sim → notch broadcast) ─────────────────────────────────
 ipcMain.handle('state:update', (_e, payload) => {
   if (notchWindow && !notchWindow.isDestroyed())
@@ -293,14 +451,13 @@ ipcMain.handle('state:update', (_e, payload) => {
 });
 
 ipcMain.handle('battery:get', async () => cachedBattery);
-ipcMain.handle('settings:open', () => createSimWindow());
 
 // ── Internal helpers ──────────────────────────────────────────────────────
 function broadcastPosition() {
   if (!notchWindow || notchWindow.isDestroyed()) return;
   const [x, y] = notchWindow.getPosition();
   const msg = { x, y };
-  [notchWindow, simWindow].forEach(w => {
-    if (w && !w.isDestroyed()) try { w.webContents.send('position-changed', msg); } catch { }
-  });
+  if (notchWindow && !notchWindow.isDestroyed()) {
+    try { notchWindow.webContents.send('position-changed', msg); } catch { }
+  }
 }
