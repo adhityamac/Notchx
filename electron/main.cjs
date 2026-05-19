@@ -25,7 +25,9 @@ let cachedBattery = { percentage: 100, is_charging: false };
 let clickThrough = false;
 let isAppQuitting = false;
 
-app.disableHardwareAcceleration();
+// GPU compositing is required for correct transparent-window rendering on Windows.
+// disableHardwareAcceleration() was previously set but forces CPU compositing,
+// breaking HiDPI scaling and hurting performance on transparent overlays.
 
 // â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function rendererUrl(type = 'notch') {
@@ -39,8 +41,8 @@ function rendererUrl(type = 'notch') {
  * Uses native screen.getPrimaryDisplay().bounds so it is always accurate,
  * regardless of what the renderer reports for screen dimensions.
  */
-function calcX(preset, windowWidth) {
-  const { bounds } = screen.getPrimaryDisplay();
+function calcX(preset, windowWidth, displayBounds) {
+  const bounds = displayBounds || screen.getPrimaryDisplay().bounds;
   switch (preset) {
     case 'top-left': return bounds.x + 16;
     case 'top-right': return bounds.x + bounds.width - windowWidth - 16;
@@ -158,6 +160,23 @@ else {
     hardwareInterval = setInterval(pushSystemStats, 2000);
     pushSystemStats();
     startMediaMonitor();
+
+    // ── Multi-monitor reanchor ──────────────────────────────────────────────
+    // Re-position the window whenever displays are added, removed, or scaled.
+    // Uses the display nearest the current window position so dragging to a
+    // secondary monitor and back still keeps the pill correctly centred.
+    const reanchorWindow = () => {
+      if (!notchWindow || notchWindow.isDestroyed()) return;
+      const winBounds = notchWindow.getBounds();
+      const display = screen.getDisplayNearestPoint({ x: winBounds.x + winBounds.width / 2, y: winBounds.y });
+      const [w, h] = notchWindow.getSize();
+      const x = calcX(activePreset, w, display.bounds);
+      notchWindow.setBounds({ x, y: display.bounds.y, width: w, height: h }, false);
+      safeLog(`[Main] reanchor display=${display.id} x=${x}`);
+    };
+    screen.on('display-metrics-changed', reanchorWindow);
+    screen.on('display-removed', reanchorWindow);
+    screen.on('display-added', reanchorWindow);
   });
 }
 

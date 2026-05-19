@@ -13,7 +13,10 @@ interface BatteryData {
 
 export default function App() {
   const [islandState, setIslandState] = useState<IslandState>('idle');
-  // UX Architecture: Concurrent State Engine
+  // UX Architecture: Non-Destructive Priority Queue
+  // A ref-based stack avoids stale closure bugs in setTimeout callbacks.
+  // secondaryState (useState) is the RENDER value — updated whenever the queue changes.
+  const stateQueueRef = useRef<IslandState[]>([]);
   const [secondaryState, setSecondaryState] = useState<IslandState | null>(null);
   const [isExpanded, setIsExpanded] = useState(false);
   const constraintsRef = useRef<HTMLDivElement>(null);
@@ -59,6 +62,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    let lastX = 0;
     let lastY = 0;
     let ghostTimeout: ReturnType<typeof setTimeout> | null = null;
 
@@ -67,19 +71,22 @@ export default function App() {
       const dt = now - mouseVelocityRef.current.lastTime;
       if (dt > 0) {
         const velocityY = (e.clientY - lastY) / dt;
+        const velocityX = (e.clientX - lastX) / dt;
 
-        // If moving mouse rapidly towards the top of the screen (browser tabs), and not interacting with the island
-        if (e.clientY < 60 && velocityY < -1.5 && islandStateRef.current === 'idle') {
+        // Ghost if moving fast (any axis) within 40px of top — covers both
+        // rapid upward strokes AND horizontal tab-bar navigation
+        if (e.clientY < 40 && (Math.abs(velocityY) > 0.8 || Math.abs(velocityX) > 2.0) && islandStateRef.current === 'idle') {
           setIsGhosted(true);
           if (ghostTimeout) clearTimeout(ghostTimeout);
           ghostTimeout = setTimeout(() => {
             setIsGhosted(false);
-          }, 2000); // Auto-recover ghosting after 2 seconds of inactivity
-        } else if (e.clientY > 100) {
+          }, 800); // Snap back quickly once user settles on a tab
+        } else if (e.clientY > 80) {
           setIsGhosted(false);
           if (ghostTimeout) clearTimeout(ghostTimeout);
         }
 
+        lastX = e.clientX;
         lastY = e.clientY;
         mouseVelocityRef.current.lastTime = now;
       }
@@ -111,12 +118,23 @@ export default function App() {
 
   // ── Change state ─────────────────────────────────────────────────────────
   const changeState = useCallback((s: IslandState, expanded = false, autoRevert = 0) => {
-    // If a priority state comes in while music/timer is active, move music/timer to secondary state.
-    if ((s === 'battery' || s === 'notification' || s === 'volume') && (islandStateRef.current === 'music' || islandStateRef.current === 'timer')) {
-      setSecondaryState(islandStateRef.current);
+    // ── Non-destructive priority queue ───────────────────────────────────────────
+    // Transient alerts (battery, notification, volume) push the CURRENT
+    // context onto a stack so it can be restored when the alert reverts,
+    // instead of permanently overwriting it.
+    const ALERT_STATES: IslandState[] = ['battery', 'notification', 'volume'];
+    if (ALERT_STATES.includes(s) && !ALERT_STATES.includes(islandStateRef.current)) {
+      // Push the current non-alert state so we can restore it later
+      stateQueueRef.current = [islandStateRef.current, ...stateQueueRef.current].slice(0, 4);
     } else if (s === 'idle') {
-      setSecondaryState(null);
+      // Clearing to idle flushes the entire queue
+      stateQueueRef.current = [];
+    } else if (!ALERT_STATES.includes(s)) {
+      // Any deliberate non-alert navigation clears the queue too
+      stateQueueRef.current = [];
     }
+    // Sync render value to queue head
+    setSecondaryState(stateQueueRef.current[0] ?? null);
 
     const isTemporary = ['volume', 'battery', 'shared', 'device', 'dropzone', 'copied'].includes(s);
     if (!isTemporary && s !== 'timer' && timerRef.current) {
@@ -136,10 +154,12 @@ export default function App() {
 
     if (autoRevert > 0) {
       contextTimeoutRef.current = setTimeout(() => {
-        // Evaluate autonomous priority state after revert
-        if (secondaryState) {
-          changeState(secondaryState);
-          setSecondaryState(null);
+        // Pop from the ref-based queue (avoids stale closure reading useState)
+        const restored = stateQueueRef.current[0];
+        if (restored) {
+          stateQueueRef.current = stateQueueRef.current.slice(1);
+          setSecondaryState(stateQueueRef.current[0] ?? null);
+          changeState(restored);
         } else if (timerRef.current) {
           changeState('timer', false);
         } else if (mediaDataRef.current && mediaDataRef.current.playbackStatus === 'Playing') {
@@ -362,16 +382,19 @@ export default function App() {
   // ════════════════════════════════════════════════════════════════════════
   return (
     <div ref={constraintsRef} className="w-screen h-screen overflow-hidden relative">
-      {/* Organic "Gooey" Merging Filter */}
-      <svg className="hidden" aria-hidden="true" style={{ position: 'absolute', width: 0, height: 0 }}>
-        <defs>
-          <filter id="goo">
-            <feGaussianBlur in="SourceGraphic" stdDeviation="10" result="blur" />
-            <feColorMatrix in="blur" mode="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 25 -12" result="goo" />
-            <feComposite in="SourceGraphic" in2="goo" operator="atop" />
-          </filter>
-        </defs>
-      </svg>
+      {/* Organic "Gooey" Merging Filter — only mounted when split-pill is active
+          to avoid running feGaussianBlur+feColorMatrix continuously at idle. */}
+      {secondaryState !== null && (
+        <svg className="hidden" aria-hidden="true" style={{ position: 'absolute', width: 0, height: 0 }}>
+          <defs>
+            <filter id="goo">
+              <feGaussianBlur in="SourceGraphic" stdDeviation="10" result="blur" />
+              <feColorMatrix in="blur" mode="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 25 -12" result="goo" />
+              <feComposite in="SourceGraphic" in2="goo" operator="atop" />
+            </filter>
+          </defs>
+        </svg>
+      )}
       <AnimatePresence>
         <motion.div
           key="island-container"
@@ -450,6 +473,10 @@ export default function App() {
               }}
               mediaData={mediaData}
               timerSecs={timerSecs}
+              onDismissShared={() => {
+                setSharedFile(null);
+                changeState('idle');
+              }}
               onMediaControl={(action, payload) => {
                 const api = getDesktopApi();
                 if (!api) return;

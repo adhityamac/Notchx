@@ -58,6 +58,7 @@ export interface DynamicIslandProps {
   mediaData?: MediaData | null;
   onMediaControl?: (action: string, payload?: any) => void;
   timerSecs?: number;
+  onDismissShared?: () => void;
 }
 
 // Bug 1 fix: every state MUST have explicit width + height so Framer Motion
@@ -126,7 +127,7 @@ export const DynamicIsland = ({
   cameraActive, micActive, copiedText, volumeLevel = 50, setVolumeLevel, onHoverPeek,
   scaleModifier = 1, yOffset = 0, theme = 'dark', actualBattery = 100, designMode = false,
   onVolumeScroll, systemStats, weatherData, sharedFile, onToggleNetwork, mediaData, onMediaControl,
-  timerSecs = 0
+  timerSecs = 0, onDismissShared
 }: DynamicIslandProps) => {
 
   let currentState = activeState as string;
@@ -362,7 +363,7 @@ export const DynamicIsland = ({
         {activeState === 'download' && <DownloadContent key="download" />}
         {activeState === 'device' && <DeviceContent key="device" stats={systemStats} />}
         {activeState === 'copied' && <CopiedContent key="copied" text={copiedText} />}
-        {activeState === 'shared' && <SharedContent key="shared" file={sharedFile} />}
+        {activeState === 'shared' && <SharedContent key="shared" file={sharedFile} onDismiss={onDismissShared} />}
         {activeState === 'volume' && <VolumeContent key="volume" level={volumeLevel} />}
         {activeState === 'weather' && <WeatherContent key="weather" isExpanded={isExpanded} data={weatherData} />}
         {activeState === 'calendar' && <CalendarContent key="calendar" isExpanded={isExpanded} />}
@@ -408,13 +409,21 @@ const IdleContent = forwardRef<HTMLDivElement>((props, ref) => {
       animate={{ opacity: 1, scale: 1 }}
       exit={{ opacity: 0, scale: 0.85 }}
       transition={{ duration: 0.15, ease: 'easeOut' }}
-      className="w-full h-full flex items-center justify-between px-4 select-none"
+      className="w-full h-full flex items-center justify-between px-4 select-none group"
       {...props}
     >
       {/* Beautiful Time Display */}
       <div className="flex items-center gap-1.5 pl-1">
         <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse shadow-[0_0_8px_#3b82f6]" />
         <span className="text-xs font-bold tracking-wider text-white/90">{time}</span>
+      </div>
+      {/* Scroll-volume affordance hint — pure CSS opacity, zero JS overhead */}
+      <div className="affordance-hint flex items-center gap-1 pr-1" aria-hidden="true">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+          <rect x="4" y="1" width="4" height="7" rx="2" stroke="currentColor" strokeWidth="1.2" className="text-white/50"/>
+          <line x1="6" y1="3" x2="6" y2="5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" className="text-white/50"/>
+          <path d="M3 9.5L6 11L9 9.5" stroke="currentColor" strokeWidth="1" strokeLinecap="round" className="text-white/40"/>
+        </svg>
       </div>
     </motion.div>
   );
@@ -443,14 +452,15 @@ const MusicContent = forwardRef<HTMLDivElement, { isExpanded?: boolean; media?: 
   }, [media, progressVal]);
 
   // 60fps hardware-accelerated progress interpolation without React re-renders
-  useAnimationFrame((time, delta) => {
-    if (isPlaying && duration > 0) {
-      const deltaSecs = delta / 1000;
-      const increment = (deltaSecs / duration) * 100;
-      let next = progressVal.get() + increment;
-      if (next >= 100) next = 0; // Loop back to start
-      progressVal.set(next);
-    }
+  useAnimationFrame((_time, delta) => {
+    // Step 3 performance gate: bail early when music is not playing or view
+    // is collapsed — avoids 60fps DOM work when MusicContent is invisible.
+    if (!isPlaying || duration <= 0 || !isExpanded) return;
+    const deltaSecs = delta / 1000;
+    const increment = (deltaSecs / duration) * 100;
+    let next = progressVal.get() + increment;
+    if (next >= 100) next = 0; // Loop back to start
+    progressVal.set(next);
   });
 
   const handlePlayPause = (e: React.MouseEvent) => {
@@ -848,16 +858,48 @@ const CopiedContent = forwardRef<HTMLDivElement, { text?: string }>(({ text, ...
   </motion.div>
 ));
 
-// Feature 12: Drag & Drop Shared
-const SharedContent = forwardRef<HTMLDivElement, { file?: { name: string, size: string } | null }>(({ file, ...props }, ref) => (
-  <motion.div ref={ref} initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }} className="w-full h-full flex items-center gap-3 px-5" {...props}>
+// Feature 12: Drag & Drop Shared — Functional File Shelf
+// Files dropped IN show here; the row is draggable so users can drag OUT to
+// other apps (Explorer, email, etc.). A dismiss button clears the shelf.
+const SharedContent = forwardRef<HTMLDivElement, { file?: { name: string, size: string } | null; onDismiss?: () => void }>(
+  ({ file, onDismiss, ...props }, ref) => (
+  <motion.div
+    ref={ref}
+    initial={{ opacity: 0, scale: 0.9 }}
+    animate={{ opacity: 1, scale: 1 }}
+    exit={{ opacity: 0, scale: 0.9 }}
+    className="w-full h-full flex items-center gap-3 px-4"
+    {...props}
+  >
     <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-emerald-600 to-green-400 flex items-center justify-center text-white shrink-0 shadow-[0_0_15px_rgba(52,211,153,0.4)] border border-white/10">
       <Share2 size={14} strokeWidth={2.5} />
     </div>
-    <div className="flex flex-col overflow-hidden">
-      <span className="text-emerald-400 font-bold text-sm tracking-wide drop-shadow-[0_0_5px_rgba(52,211,153,0.4)] truncate">{file ? file.name : 'File Shared'}</span>
+    {/* Draggable file row — dragging out hands the file path back to the OS */}
+    <div
+      className="shelf-file flex flex-col overflow-hidden flex-1 cursor-grab active:cursor-grabbing"
+      draggable="true"
+      title="Drag to share · × to clear"
+      onDragStart={(e) => {
+        e.dataTransfer.effectAllowed = 'copy';
+        e.dataTransfer.setData('text/plain', file?.name || 'File');
+      }}
+    >
+      <span className="text-emerald-400 font-bold text-sm tracking-wide drop-shadow-[0_0_5px_rgba(52,211,153,0.4)] truncate">
+        {file ? file.name : 'File Shared'}
+      </span>
       {file && <span className="text-emerald-400/60 font-semibold text-[10px] tracking-wider uppercase">{file.size}</span>}
     </div>
+    {/* Dismiss button — clears the shelf and returns to idle */}
+    {onDismiss && (
+      <button
+        onClick={(e) => { e.stopPropagation(); onDismiss(); }}
+        className="w-6 h-6 rounded-full bg-white/10 hover:bg-white/20 transition-colors flex items-center justify-center text-white/60 hover:text-white/90 shrink-0 border border-white/10"
+        title="Clear shelf"
+        aria-label="Clear file shelf"
+      >
+        <span className="text-[11px] font-bold leading-none">×</span>
+      </button>
+    )}
   </motion.div>
 ));
 

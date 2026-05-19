@@ -690,3 +690,38 @@
 /* Dot leader for lyrics */
 .lyric-dot { display: inline-block; animation: bpm-throb 0.5s ease-in-out infinite; }
 
+/* ── Step 8: Interaction Affordance Hints ────────────────────────────────────
+   Micro-cues that surface hidden interactions without adding JS state.
+   - .affordance-hint: the scroll-wheel SVG in IdleContent
+   - Works via Tailwind's `group` on the parent + CSS sibling selection
+   ────────────────────────────────────────────────────────────────────────── */
+.affordance-hint {
+  opacity: 0;
+  transition: opacity 0.25s ease;
+  pointer-events: none;
+  color: rgba(255, 255, 255, 0.55);
+}
+/* Show when the pill's root has .group and is hovered */
+.group:hover .affordance-hint {
+  opacity: 1;
+}
+
+/* ── Step 6 (Performance): Scope will-change to active state classes only ──
+   Prevents blanket GPU layer promotion on every liquid-bg div.
+   Only promote layers that are actually animating their transform.
+   ────────────────────────────────────────────────────────────────────────── */
+.liquid-bg.state-music,
+.liquid-bg.state-call,
+.liquid-bg.state-voice_chat {
+  will-change: transform;
+}
+
+/* ── Step 7: Shelf-file drag affordance ──────────────────────────────────── */
+.shelf-file {
+  cursor: grab;
+  -webkit-user-drag: element;
+}
+.shelf-file:active {
+  cursor: grabbing;
+}
+
