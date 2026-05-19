@@ -57,14 +57,15 @@ function createNotchWindow() {
   const x = calcX(activePreset, IDLE_W);
   const y = bounds.y; // always 0
 
-  safeLog(`[Main] Notch x=${x} y=${y} display=${bounds.width}Ã—${bounds.height}`);
+  safeLog(`[Main] Notch x=${x} y=${y} display=${bounds.width}×${bounds.height}`);
 
   notchWindow = new BrowserWindow({
     width: IDLE_W, height: IDLE_H, x, y,
     frame: false,
     transparent: true,
     backgroundColor: '#00000000',
-    // resizable:true is required on Windows â€” resizable:false causes setBounds()
+    thickFrame: false,
+    // resizable:true is required on Windows — resizable:false causes setBounds()
     // to silently ignore width/height changes. frame:false hides resize handles.
     resizable: true,
     movable: true,
