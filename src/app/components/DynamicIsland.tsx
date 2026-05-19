@@ -1,4 +1,4 @@
-import { motion, AnimatePresence, useMotionValue, useSpring } from 'motion/react';
+import { motion, AnimatePresence, useMotionValue, useSpring, useAnimationFrame, useTransform } from 'motion/react';
 import { useState, useEffect, forwardRef, useRef } from 'react';
 import { Phone, PhoneOff, Timer, Bell, BatteryCharging, Download, Bluetooth, Send, Copy, Share2, Volume2, Mic, Wind, Droplets, Calendar as CalendarIcon, Video, Wifi, Moon, Sun, Cloud, BatteryMedium, BatteryFull, BatteryLow, FileUp, CheckCircle2, Activity, Users, MessageSquare, Mail, HardDrive, Shuffle, Repeat } from 'lucide-react';
 import { TrueAudioVisualizer } from './TrueAudioVisualizer';
@@ -17,11 +17,26 @@ function liquidClass(state: string): string {
 
 export type IslandState = 'idle' | 'music' | 'timer' | 'call' | 'notification' | 'battery' | 'download' | 'device' | 'split' | 'copied' | 'shared' | 'volume' | 'weather' | 'calendar' | 'control_center' | 'dropzone' | 'voice_chat' | 'notification_stack';
 
+export interface WeatherData {
+  city: string;
+  weather: { temperature?: number; windspeed?: number; is_day?: number };
+}
+export interface MediaData {
+  title?: string;
+  artist?: string;
+  playbackStatus?: string;
+  position?: number;
+  duration?: number;
+  isShuffle?: boolean;
+  repeatMode?: 'Track' | 'List' | 'off' | 'one' | 'all';
+}
+
 export interface DynamicIslandProps {
   isGhosted?: boolean;
   activeState: IslandState;
   secondaryState?: IslandState | null;
   onClick?: () => void;
+  onDoubleClick?: () => void;
   isExpanded?: boolean;
   focusMode?: boolean;
   cameraActive?: boolean;
@@ -37,11 +52,12 @@ export interface DynamicIslandProps {
   designMode?: boolean;
   systemStats?: { cpuUsage: number, ramUsage: number, totalMemStr: string };
   onVolumeScroll?: () => void;
-  weatherData?: { city: string, weather: any } | null;
+  weatherData?: WeatherData | null;
   sharedFile?: { name: string, size: string } | null;
   onToggleNetwork?: (type: 'wifi' | 'bluetooth', state: boolean) => void;
-  mediaData?: any;
+  mediaData?: MediaData | null;
   onMediaControl?: (action: string, payload?: any) => void;
+  timerSecs?: number;
 }
 
 // Bug 1 fix: every state MUST have explicit width + height so Framer Motion
@@ -75,22 +91,22 @@ const stateStyles: Record<string, { width: number; height: number; borderRadius:
   device: { width: 340, height: 64, borderRadius: 32, top: 12 },
 };
 
-// Subtle glows depending on the active context
+// Subtle glows depending on the active context - with premium iOS expanded elevation shadows
 const glowStyles: Record<string, string> = {
-  music_expanded: '0px 10px 40px rgba(255,255,255,0.15)',
+  music_expanded: '0px 32px 64px rgba(0,0,0,0.5), 0px 8px 24px rgba(0,0,0,0.3)',
   timer: '0px 8px 30px rgba(249,115,22,0.2)',
-  call: '0px 8px 30px rgba(34,197,94,0.2)',
+  call: '0px 24px 48px rgba(0,0,0,0.4), 0px 6px 16px rgba(0,0,0,0.2)',
   battery: '0px 8px 30px rgba(34,197,94,0.15)',
-  download: '0px 8px 30px rgba(59,130,246,0.2)',
+  download: '0px 8px 30px rgba(0,122,255,0.2)',
   volume: '0px 8px 30px rgba(255,255,255,0.1)',
-  weather_expanded: '0px 10px 40px rgba(56,189,248,0.2)',
-  calendar_expanded: '0px 10px 40px rgba(168,85,247,0.2)',
-  control_center: '0px 10px 40px rgba(255,255,255,0.1)',
-  dropzone_expanded: '0px 10px 40px rgba(168,85,247,0.2)',
+  weather_expanded: '0px 32px 64px rgba(0,0,0,0.5), 0px 8px 24px rgba(0,0,0,0.3)',
+  calendar_expanded: '0px 32px 64px rgba(0,0,0,0.5), 0px 8px 24px rgba(0,0,0,0.3)',
+  control_center: '0px 24px 48px rgba(0,0,0,0.4), 0px 6px 16px rgba(0,0,0,0.2)',
+  dropzone_expanded: '0px 32px 64px rgba(0,0,0,0.5), 0px 8px 24px rgba(0,0,0,0.3)',
   voice_chat: '0px 8px 30px rgba(34,197,94,0.2)',
-  voice_chat_expanded: '0px 10px 40px rgba(34,197,94,0.25)',
-  notification_stack_expanded: '0px 10px 40px rgba(244,63,94,0.2)',
-  device: '0px 10px 30px rgba(255,255,255,0.2)',
+  voice_chat_expanded: '0px 32px 64px rgba(0,0,0,0.5), 0px 8px 24px rgba(0,0,0,0.3)',
+  notification_stack_expanded: '0px 32px 64px rgba(0,0,0,0.5), 0px 8px 24px rgba(0,0,0,0.3)',
+  device: '0px 24px 48px rgba(0,0,0,0.4), 0px 6px 16px rgba(0,0,0,0.2)',
   split: 'none',
   default: '0px 10px 30px rgba(0,0,0,0.5)',
 };
@@ -106,10 +122,11 @@ const springTransition = {
 };
 
 export const DynamicIsland = ({
-  isGhosted, activeState, secondaryState, onClick, isExpanded, focusMode,
+  isGhosted, activeState, secondaryState, onClick, onDoubleClick, isExpanded, focusMode,
   cameraActive, micActive, copiedText, volumeLevel = 50, setVolumeLevel, onHoverPeek,
   scaleModifier = 1, yOffset = 0, theme = 'dark', actualBattery = 100, designMode = false,
-  onVolumeScroll, systemStats, weatherData, sharedFile, onToggleNetwork, mediaData, onMediaControl
+  onVolumeScroll, systemStats, weatherData, sharedFile, onToggleNetwork, mediaData, onMediaControl,
+  timerSecs = 0
 }: DynamicIslandProps) => {
 
   let currentState = activeState as string;
@@ -237,6 +254,20 @@ export const DynamicIsland = ({
   const splitWidth = 44; // Circular split pill
   const gap = 12; // Gap between primary and secondary
 
+  const handleDoubleClick = (e: React.MouseEvent) => {
+    if (!onDoubleClick) return;
+    const target = e.target as HTMLElement;
+    if (
+      target.closest('button') ||
+      target.closest('input') ||
+      target.closest('[role="button"]') ||
+      target.closest('.cursor-pointer:not(.backdrop-blur-xl)')
+    ) {
+      return;
+    }
+    onDoubleClick();
+  };
+
   return (
     <>
       <AnimatePresence>
@@ -283,12 +314,13 @@ export const DynamicIsland = ({
         border: '1px solid var(--ambient-border)',
         top: (baseStyle.top as number) + yOffset,
         boxShadow: isDraggedOver ? '0px 0px 40px rgba(59,130,246,0.6)' : currentGlow,
-        scale: (isDraggedOver ? 1.05 : 1) * scaleModifier
+        scale: (isGhosted ? 0.8 : (isDraggedOver ? 1.05 : 1)) * scaleModifier
       }}
-      whileHover={{ scale: 1.02 * scaleModifier }}
-      whileTap={{ scale: 0.98 * scaleModifier }}
+      whileHover={{ scale: isGhosted ? 0.8 : 1.02 * scaleModifier }}
+      whileTap={{ scale: isGhosted ? 0.8 : 0.98 * scaleModifier }}
       transition={springTransition}
       onClick={onClick}
+      onDoubleClick={handleDoubleClick}
       onMouseEnter={() => onHoverPeek && onHoverPeek(true)}
       onMouseLeave={() => onHoverPeek && onHoverPeek(false)}
       onDragOver={handleDragOver}
@@ -298,7 +330,9 @@ export const DynamicIsland = ({
       style={{
         originX: 0.5, originY: 0,
         x: magneticX,
-        y: magneticY
+        y: magneticY,
+        opacity: isGhosted ? 0.15 : 1,
+        pointerEvents: isGhosted ? 'none' : 'auto'
       }}
       className={`
         backdrop-blur-xl overflow-hidden relative z-50
@@ -321,7 +355,7 @@ export const DynamicIsland = ({
       <AnimatePresence mode="popLayout">
         {activeState === 'idle' && <IdleContent key="idle" />}
         {activeState === 'music' && <MusicContent key="music" isExpanded={isExpanded} media={mediaData} onMediaControl={onMediaControl} />}
-        {activeState === 'timer' && <TimerContent key="timer" />}
+        {activeState === 'timer' && <TimerContent key="timer" timerSecs={timerSecs} />}
         {activeState === 'call' && <CallContent key="call" />}
         {activeState === 'notification' && <NotificationContent key="notification" />}
         {activeState === 'battery' && <BatteryContent key="battery" batteryLevel={actualBattery} />}
@@ -350,10 +384,21 @@ const IdleContent = forwardRef<HTMLDivElement>((props, ref) => {
   const [time, setTime] = useState(() => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
 
   useEffect(() => {
-    const timer = setInterval(() => {
-      setTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
-    }, 1000);
-    return () => clearInterval(timer);
+    let timeoutId: ReturnType<typeof setTimeout>;
+    let intervalId: ReturnType<typeof setInterval>;
+
+    const updateTime = () => setTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+
+    // Sync to the exact start of the next minute
+    const now = new Date();
+    const msUntilNextMinute = (60 - now.getSeconds()) * 1000 - now.getMilliseconds();
+
+    timeoutId = setTimeout(() => {
+      updateTime();
+      intervalId = setInterval(updateTime, 60000); // Update every 60 seconds thereafter
+    }, msUntilNextMinute);
+
+    return () => { clearTimeout(timeoutId); clearInterval(intervalId); };
   }, []);
 
   return (
@@ -375,12 +420,13 @@ const IdleContent = forwardRef<HTMLDivElement>((props, ref) => {
   );
 });
 
-const MusicContent = forwardRef<HTMLDivElement, { isExpanded?: boolean; media?: any; onMediaControl?: (action: string, payload?: any) => void }>(({ isExpanded, media, onMediaControl, ...props }, ref) => {
+const MusicContent = forwardRef<HTMLDivElement, { isExpanded?: boolean; media?: MediaData | null; onMediaControl?: (action: string, payload?: any) => void }>(({ isExpanded, media, onMediaControl, ...props }, ref) => {
   const [isPlaying, setIsPlaying] = useState(media ? media.playbackStatus === 'Playing' : true);
   const [isShuffle, setIsShuffle] = useState(media?.isShuffle || false);
   const [repeatMode, setRepeatMode] = useState<'off' | 'all' | 'one'>(media?.repeatMode === 'Track' ? 'one' : media?.repeatMode === 'List' ? 'all' : 'off');
-  const [progress, setProgress] = useState(media?.duration ? (media.position / media.duration) * 100 : 35); // percentage 0 - 100
   const [duration, setDuration] = useState(media?.duration || 214);
+
+  const progressVal = useMotionValue(media?.duration ? (media.position / media.duration) * 100 : 35);
 
   useEffect(() => {
     if (media) {
@@ -391,19 +437,21 @@ const MusicContent = forwardRef<HTMLDivElement, { isExpanded?: boolean; media?: 
       }
       if (media.duration && media.position !== undefined) {
         setDuration(media.duration);
-        setProgress((media.position / media.duration) * 100);
+        progressVal.set((media.position / media.duration) * 100);
       }
     }
-  }, [media]);
+  }, [media, progressVal]);
 
-  // Fallback simulated progress only if no real duration available
-  useEffect(() => {
-    if (!isPlaying || media?.duration) return;
-    const interval = setInterval(() => {
-      setProgress(p => (p >= 100 ? 0 : p + 0.5));
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [isPlaying, media?.duration]);
+  // 60fps hardware-accelerated progress interpolation without React re-renders
+  useAnimationFrame((time, delta) => {
+    if (isPlaying && duration > 0) {
+      const deltaSecs = delta / 1000;
+      const increment = (deltaSecs / duration) * 100;
+      let next = progressVal.get() + increment;
+      if (next >= 100) next = 0; // Loop back to start
+      progressVal.set(next);
+    }
+  });
 
   const handlePlayPause = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -413,13 +461,13 @@ const MusicContent = forwardRef<HTMLDivElement, { isExpanded?: boolean; media?: 
 
   const handleNext = (e: React.MouseEvent) => {
     e.stopPropagation();
-    setProgress(0);
+    progressVal.set(0);
     if (onMediaControl) onMediaControl('next');
   };
 
   const handlePrev = (e: React.MouseEvent) => {
     e.stopPropagation();
-    setProgress(0);
+    progressVal.set(0);
     if (onMediaControl) onMediaControl('prev');
   };
 
@@ -442,19 +490,22 @@ const MusicContent = forwardRef<HTMLDivElement, { isExpanded?: boolean; media?: 
     const rect = e.currentTarget.getBoundingClientRect();
     const clickX = e.clientX - rect.left;
     const newProgress = Math.max(0, Math.min(100, (clickX / rect.width) * 100));
-    setProgress(newProgress);
+    progressVal.set(newProgress);
     const targetSeconds = (newProgress / 100) * duration;
     if (onMediaControl) onMediaControl('seek', targetSeconds);
   };
 
   const formatTime = (secs: number) => {
+    if (!secs || isNaN(secs)) return '0:00';
     const mins = Math.floor(secs / 60);
     const remainSecs = Math.floor(secs % 60);
     return `${mins}:${remainSecs < 10 ? '0' : ''}${remainSecs}`;
   };
 
-  const currentSecs = (progress / 100) * duration;
-  const remainSecs = duration - currentSecs;
+  // Directly bind text values to the motion value to avoid re-renders
+  const widthTransform = useTransform(progressVal, p => `${p}%`);
+  const currentTimeText = useTransform(progressVal, p => formatTime((p / 100) * duration));
+  const remainTimeText = useTransform(progressVal, p => `-${formatTime(duration - ((p / 100) * duration))}`);
 
   const title = media?.title || 'Midnight City';
   const artist = media?.artist || 'M83';
@@ -530,25 +581,25 @@ const MusicContent = forwardRef<HTMLDivElement, { isExpanded?: boolean; media?: 
 
         <div className="flex flex-col gap-1.5 mt-1">
           {/* Interactive Progress bar */}
-          <div 
+          <div
             onClick={handleProgressClick}
             className="w-full h-2 bg-white/15 hover:bg-white/20 transition-colors rounded-full overflow-hidden cursor-pointer relative py-0.5 flex items-center"
           >
             <motion.div
               className="h-full bg-gradient-to-r from-blue-400 to-blue-500 rounded-full relative"
-              style={{ width: `${progress}%` }}
+              style={{ width: widthTransform }}
               transition={{ duration: 0.1 }}
             />
           </div>
           <div className="flex justify-between text-[10px] opacity-40 px-0.5 font-medium">
-            <span>{formatTime(currentSecs)}</span><span>-{formatTime(remainSecs)}</span>
+            <motion.span>{currentTimeText}</motion.span><motion.span>{remainTimeText}</motion.span>
           </div>
 
           {/* Controls */}
           <div className="flex items-center justify-between px-1 mt-0.5">
             {/* Shuffle Button */}
-            <button 
-              onClick={handleShuffle} 
+            <button
+              onClick={handleShuffle}
               className={`p-2 rounded-xl transition-all cursor-pointer ${isShuffle ? 'text-blue-400 bg-blue-500/10 shadow-[0_0_10px_rgba(59,130,246,0.3)]' : 'opacity-50 hover:opacity-100'}`}
             >
               <Shuffle size={16} strokeWidth={2.5} />
@@ -577,8 +628,8 @@ const MusicContent = forwardRef<HTMLDivElement, { isExpanded?: boolean; media?: 
             </div>
 
             {/* Repeat Button */}
-            <button 
-              onClick={handleRepeat} 
+            <button
+              onClick={handleRepeat}
               className={`p-2 rounded-xl transition-all cursor-pointer relative ${repeatMode !== 'off' ? 'text-blue-400 bg-blue-500/10 shadow-[0_0_10px_rgba(59,130,246,0.3)]' : 'opacity-50 hover:opacity-100'}`}
             >
               <Repeat size={16} strokeWidth={2.5} />
@@ -593,30 +644,40 @@ const MusicContent = forwardRef<HTMLDivElement, { isExpanded?: boolean; media?: 
   );
 });
 
-const TimerContent = forwardRef<HTMLDivElement>((props, ref) => (
-  <motion.div
-    ref={ref}
-    initial={{ opacity: 0, scale: 0.85 }}
-    animate={{ opacity: 1, scale: 1 }}
-    exit={{ opacity: 0, scale: 0.85 }}
-    transition={{ duration: 0.15, ease: 'easeOut' }}
-    className="w-full h-full flex items-center justify-between px-5"
-    {...props}
-  >
-    <div className="flex items-center justify-center w-8 h-8 rounded-full bg-gradient-to-tr from-orange-600 to-amber-500 text-white shadow-[0_0_10px_rgba(249,115,22,0.5)]">
-      <Timer size={14} strokeWidth={2.5} />
-    </div>
-    <div className="flex items-center gap-1 text-amber-500 tracking-wider pr-4" style={{ fontFamily: "'Inter', sans-serif" }}>
-      <motion.span
-        animate={{ fontVariationSettings: ['"wght" 400', '"wght" 800', '"wght" 400'] }}
-        transition={{ duration: 1, repeat: Infinity, ease: "easeInOut" }}
-        className="text-[15px] font-medium drop-shadow-[0_0_8px_rgba(245,158,11,0.6)]"
-      >
-        00:00
-      </motion.span>
-    </div>
-  </motion.div>
-));
+const TimerContent = forwardRef<HTMLDivElement, { timerSecs?: number }>((props, ref) => {
+  const { timerSecs = 0, ...rest } = props;
+
+  const formatTime = (secs: number) => {
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  };
+
+  return (
+    <motion.div
+      ref={ref}
+      initial={{ opacity: 0, scale: 0.85 }}
+      animate={{ opacity: 1, scale: 1 }}
+      exit={{ opacity: 0, scale: 0.85 }}
+      transition={{ duration: 0.15, ease: 'easeOut' }}
+      className="w-full h-full flex items-center justify-between px-5"
+      {...rest}
+    >
+      <div className="flex items-center justify-center w-8 h-8 rounded-full bg-gradient-to-tr from-orange-600 to-amber-500 text-white shadow-[0_0_10px_rgba(249,115,22,0.5)]">
+        <Timer size={14} strokeWidth={2.5} />
+      </div>
+      <div className="flex items-center gap-1 text-amber-500 tracking-wider pr-4" style={{ fontFamily: "'Inter', sans-serif" }}>
+        <motion.span
+          animate={{ fontVariationSettings: ['"wght" 400', '"wght" 800', '"wght" 400'] }}
+          transition={{ duration: 1, repeat: Infinity, ease: "easeInOut" }}
+          className="text-[15px] font-medium drop-shadow-[0_0_8px_rgba(245,158,11,0.6)]"
+        >
+          {formatTime(timerSecs)}
+        </motion.span>
+      </div>
+    </motion.div>
+  );
+});
 
 const CallContent = forwardRef<HTMLDivElement>((props, ref) => (
   <motion.div
@@ -752,7 +813,7 @@ const DeviceContent = forwardRef<HTMLDivElement, { stats?: { cpuUsage: number, r
       </div>
       <span className="text-white/50 text-[10px] tracking-wider font-mono">{stats?.totalMemStr || '0GB'} RAM</span>
     </div>
-    
+
     <div className="flex items-center gap-3 w-full">
       <div className="flex flex-col flex-1 gap-1">
         <div className="flex justify-between text-[9px] font-bold text-white/60">
@@ -763,7 +824,7 @@ const DeviceContent = forwardRef<HTMLDivElement, { stats?: { cpuUsage: number, r
           <motion.div className="h-full bg-blue-500 rounded-full" animate={{ width: `${stats?.cpuUsage || 0}%` }} transition={{ ease: 'easeOut' }} />
         </div>
       </div>
-      
+
       <div className="flex flex-col flex-1 gap-1">
         <div className="flex justify-between text-[9px] font-bold text-white/60">
           <span>RAM</span>
@@ -810,7 +871,7 @@ const VolumeContent = forwardRef<HTMLDivElement, { level: number }>(({ level, ..
   </motion.div>
 ));
 
-const WeatherContent = forwardRef<HTMLDivElement, { isExpanded?: boolean, data?: { city: string, weather: any } | null }>(({ isExpanded, data, ...props }, ref) => {
+const WeatherContent = forwardRef<HTMLDivElement, { isExpanded?: boolean, data?: WeatherData | null }>(({ isExpanded, data, ...props }, ref) => {
   const temp = data?.weather?.temperature ? Math.round(data.weather.temperature) + '°' : '72°';
   const city = data?.city || 'San Fran';
   const cityFull = data?.city || 'San Francisco';
@@ -836,7 +897,7 @@ const WeatherContent = forwardRef<HTMLDivElement, { isExpanded?: boolean, data?:
           </div>
           <div className="flex flex-col justify-center">
             <span className="font-bold text-[13px] leading-tight text-white tracking-wide">{temp}</span>
-            <span className="text-[9px] font-semibold uppercase text-white/60 leading-none tracking-wider">{city.substring(0,8)}</span>
+            <span className="text-[9px] font-semibold uppercase text-white/60 leading-none tracking-wider">{city.substring(0, 8)}</span>
           </div>
         </div>
       </motion.div>
@@ -1104,4 +1165,3 @@ const NotificationStackContent = forwardRef<HTMLDivElement, { isExpanded?: boole
     </motion.div>
   </motion.div>
 ));
-

@@ -1,10 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { DynamicIsland, IslandState } from './components/DynamicIsland';
+import { DynamicIsland, IslandState, WeatherData, MediaData } from './components/DynamicIsland';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   DESKTOP_WINDOW_SIZES, EXPANDABLE_STATES,
   getDesktopApi, getDesktopState, applyAlignPreset, AlignPreset,
 } from './desktopBridge';
+
+interface BatteryData {
+  percentage: number;
+  is_charging: boolean;
+}
 
 export default function App() {
   const [islandState, setIslandState] = useState<IslandState>('idle');
@@ -20,10 +25,11 @@ export default function App() {
 
   const [timerSecs, setTimerSecs] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const contextTimeoutRef = useRef<ReturnType<typeof setTimeout>|null>(null);
+  const contextTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mediaHealthTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const [weatherData, setWeatherData] = useState<any>(null);
-  const [sharedFile, setSharedFile] = useState<{name: string, size: string} | null>(null);
+  const [weatherData, setWeatherData] = useState<WeatherData | null>(null);
+  const [sharedFile, setSharedFile] = useState<{ name: string, size: string } | null>(null);
 
   const [alignment, setAlignment] = useState<AlignPreset>('top-center');
 
@@ -31,8 +37,31 @@ export default function App() {
   const [isGhosted, setIsGhosted] = useState(false);
   const mouseVelocityRef = useRef({ x: 0, y: 0, lastTime: Date.now() });
 
+  const [mediaData, setMediaData] = useState<MediaData | null>(null);
+
+  // Stable refs for event listeners to prevent re-mounting
+  const islandStateRef = useRef<IslandState>(islandState);
+  useEffect(() => { islandStateRef.current = islandState; }, [islandState]);
+
+  const mediaDataRef = useRef<any>(mediaData);
+  useEffect(() => { mediaDataRef.current = mediaData; }, [mediaData]);
+
+  const actualBatteryRef = useRef<number>(actualBattery);
+  useEffect(() => { actualBatteryRef.current = actualBattery; }, [actualBattery]);
+
+  // Clean up global timeouts and intervals on unmount to prevent memory leaks
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+      if (contextTimeoutRef.current) clearTimeout(contextTimeoutRef.current);
+      if (mediaHealthTimeoutRef.current) clearTimeout(mediaHealthTimeoutRef.current);
+    };
+  }, []);
+
   useEffect(() => {
     let lastY = 0;
+    let ghostTimeout: ReturnType<typeof setTimeout> | null = null;
+
     const handleMouseMove = (e: MouseEvent) => {
       const now = Date.now();
       const dt = now - mouseVelocityRef.current.lastTime;
@@ -40,10 +69,15 @@ export default function App() {
         const velocityY = (e.clientY - lastY) / dt;
 
         // If moving mouse rapidly towards the top of the screen (browser tabs), and not interacting with the island
-        if (e.clientY < 60 && velocityY < -1.5 && islandState === 'idle') {
+        if (e.clientY < 60 && velocityY < -1.5 && islandStateRef.current === 'idle') {
           setIsGhosted(true);
+          if (ghostTimeout) clearTimeout(ghostTimeout);
+          ghostTimeout = setTimeout(() => {
+            setIsGhosted(false);
+          }, 2000); // Auto-recover ghosting after 2 seconds of inactivity
         } else if (e.clientY > 100) {
           setIsGhosted(false);
+          if (ghostTimeout) clearTimeout(ghostTimeout);
         }
 
         lastY = e.clientY;
@@ -52,8 +86,19 @@ export default function App() {
     };
 
     window.addEventListener('mousemove', handleMouseMove);
-    return () => window.removeEventListener('mousemove', handleMouseMove);
-  }, [islandState]);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      if (ghostTimeout) clearTimeout(ghostTimeout);
+    };
+  }, []);
+
+  // Sync isGhosted with Electron click-through state
+  useEffect(() => {
+    const api = getDesktopApi();
+    if (api) {
+      api.setClickThrough(isGhosted).catch(() => {});
+    }
+  }, [isGhosted]);
 
   // ── Resize notch window on every state/expand change ────────────────────
   const resizeForState = useCallback((state: IslandState, expanded: boolean) => {
@@ -67,19 +112,21 @@ export default function App() {
   // ── Change state ─────────────────────────────────────────────────────────
   const changeState = useCallback((s: IslandState, expanded = false, autoRevert = 0) => {
     // If a priority state comes in while music/timer is active, move music/timer to secondary state.
-    if ((s === 'battery' || s === 'notification' || s === 'volume') && (islandState === 'music' || islandState === 'timer')) {
-      setSecondaryState(islandState);
+    if ((s === 'battery' || s === 'notification' || s === 'volume') && (islandStateRef.current === 'music' || islandStateRef.current === 'timer')) {
+      setSecondaryState(islandStateRef.current);
     } else if (s === 'idle') {
       setSecondaryState(null);
     }
-    if (s !== 'timer' && timerRef.current) {
+
+    const isTemporary = ['volume', 'battery', 'shared', 'device', 'dropzone', 'copied'].includes(s);
+    if (!isTemporary && s !== 'timer' && timerRef.current) {
       clearInterval(timerRef.current); timerRef.current = null; setTimerSecs(0);
     }
-    if (s === 'timer') {
+    if (s === 'timer' && !timerRef.current) {
       setTimerSecs(0);
       timerRef.current = setInterval(() => setTimerSecs(p => p + 1), 1000);
     }
-    
+
     if (contextTimeoutRef.current) clearTimeout(contextTimeoutRef.current);
 
     const willExpand = s === 'control_center' ? true : expanded;
@@ -93,16 +140,20 @@ export default function App() {
         if (secondaryState) {
           changeState(secondaryState);
           setSecondaryState(null);
-        } else if (actualBattery < 20) {
+        } else if (timerRef.current) {
+          changeState('timer', false);
+        } else if (mediaDataRef.current && mediaDataRef.current.playbackStatus === 'Playing') {
+          changeState('music', false);
+        } else if (actualBatteryRef.current < 20) {
           changeState('battery');
         } else if (systemStats.cpuUsage > 85) {
           changeState('device');
         } else {
-          changeState('idle');
+          changeState('idle', false);
         }
       }, autoRevert);
     }
-  }, [resizeForState, actualBattery, systemStats.cpuUsage]);
+  }, [resizeForState]);
 
   const toggleExpand = useCallback(() => {
     if (islandState === 'idle') {
@@ -120,7 +171,25 @@ export default function App() {
     }
   }, [isExpanded, islandState, changeState, resizeForState]);
 
-  const [mediaData, setMediaData] = useState<any>(null);
+  const cycleSimulationState = useCallback(() => {
+    const SIMULATION_STATES: IslandState[] = [
+      'idle',
+      'music',
+      'battery',
+      'timer',
+      'device',
+      'control_center',
+      'weather',
+      'calendar',
+      'voice_chat',
+      'notification_stack'
+    ];
+    const currentIndex = SIMULATION_STATES.indexOf(islandState);
+    const nextIndex = (currentIndex + 1) % SIMULATION_STATES.length;
+    const nextState = SIMULATION_STATES[nextIndex];
+    const shouldExpand = nextState === 'control_center';
+    changeState(nextState, shouldExpand);
+  }, [islandState, changeState]);
 
   // ── Autonomous Context Engine Scheduler ──────────────────────────────────
   useEffect(() => {
@@ -131,134 +200,162 @@ export default function App() {
     let initialSet = false;
 
     // Get initial battery
-    api.getBattery().then((d: any) => {
+    api.getBattery().then((d: BatteryData) => {
       setActualBattery(d.percentage);
       wasCharging = d.is_charging;
       initialSet = true;
-    }).catch(() => { });
+    }).catch((e) => { console.error('Failed to get battery:', e); });
 
     // Sync initial volume
-    api.getVolume().then((vol: number) => setVolumeLevel(vol)).catch(() => { });
+    api.getVolume().then((vol: number) => setVolumeLevel(vol)).catch((e) => { console.error('Failed to get volume:', e); });
 
     // Sync weather
     if (api.getWeather) {
-      api.getWeather().then(d => d && setWeatherData(d)).catch(() => {});
+      api.getWeather().then(d => d && setWeatherData(d)).catch((e) => { console.error('Failed to fetch weather data:', e); });
     }
+
+    // States from which music can take over (transient/non-critical)
+    const MUSIC_PREEMPTIBLE = ['idle', 'volume', 'battery', 'device', 'copied', 'shared', 'dropzone', 'notification'];
 
     let mediaInterval: any;
     let uMedia: any;
-    if (api.onMediaUpdate) {
-      uMedia = api.onMediaUpdate((m: any) => {
-        setMediaData(m);
-        if (m && m.playbackStatus === 'Playing' && islandState === 'idle') {
+
+    // Helper shared by both push and poll paths
+    const handleMediaUpdate = (m: MediaData | null) => {
+      // Reset health check on every update. If this stops firing, the service is down.
+      if (mediaHealthTimeoutRef.current) clearTimeout(mediaHealthTimeoutRef.current);
+
+      setMediaData((prev: MediaData | null) => {
+        // Bail out of React re-renders if the media payload is functionally identical
+        if (prev && m && prev.title === m.title && prev.playbackStatus === m.playbackStatus && prev.position === m.position) return prev;
+        return m;
+      });
+
+      const cur = islandStateRef.current;
+      if (m && m.playbackStatus === 'Playing') {
+        if (MUSIC_PREEMPTIBLE.includes(cur)) {
           changeState('music', false);
-        } else if ((!m || m.playbackStatus !== 'Playing') && islandState === 'music') {
+        }
+      } else if (cur === 'music') {
+        changeState('idle', false);
+      }
+
+      // Set a new timeout. If this fires, the media service is unresponsive.
+      mediaHealthTimeoutRef.current = setTimeout(() => {
+        if (islandStateRef.current === 'music') {
+          console.warn('Media service heartbeat lost. Reverting to idle state.');
           changeState('idle', false);
         }
-      });
+      }, 5000); // 5-second timeout
+    };
+
+    if (api.onMediaUpdate) {
+      // Prefer native push-based hook to avoid JS intervals
+      uMedia = api.onMediaUpdate(handleMediaUpdate);
     } else if (api.getMediaSessions) {
+      // Fallback: active-poll path only if push is completely unsupported
       const fetchMedia = () => {
-        api.getMediaSessions!().then(m => {
-          if (m) {
-            setMediaData(m);
-            if (m.playbackStatus === 'Playing' && islandState === 'idle') {
-              changeState('music', false);
-            } else if (m.playbackStatus !== 'Playing' && islandState === 'music') {
-              changeState('idle', false);
-            }
-          } else {
-            if (islandState === 'music') {
-              changeState('idle', false);
-            }
-          }
-        }).catch(() => {});
+        api.getMediaSessions!().then((m: MediaData | null) => {
+          handleMediaUpdate(m);
+        }).catch((e) => { console.error('Failed to fetch media sessions:', e); });
       };
       fetchMedia();
-      mediaInterval = setInterval(fetchMedia, 2000);
+      mediaInterval = setInterval(fetchMedia, 1500);
     }
 
     // Battery priority
     const u1 = api.onBatteryUpdate((d: any) => {
-      setActualBattery(d.percentage);
+      setActualBattery(prev => prev !== d.percentage ? d.percentage : prev);
       if (initialSet && wasCharging !== d.is_charging) {
         wasCharging = d.is_charging;
-        changeState('battery', true, 3000); // show battery state, revert after 3s
-      } else if (d.percentage < 20 && !d.is_charging && islandState === 'idle') {
-        changeState('battery', false, 3000); // Warn low battery
+        changeState('battery', true, 2000); // show battery state, revert after 2s
+      } else if (d.percentage < 20 && !d.is_charging && islandStateRef.current === 'idle') {
+        changeState('battery', false, 2000); // Warn low battery
       }
     });
 
     // Media priority
-    const u2 = api.onMediaKey((k: string) => { 
-      if (k === 'play-pause') changeState('music', true, 5000); 
+    const u2 = api.onMediaKey((k: string) => {
+      if (k === 'play-pause') changeState('music', true, 5000);
     });
 
     // Hardware priority
     const u3 = api.onSystemStats?.((s: any) => {
-      setSystemStats(s);
-      if (s.cpuUsage > 90 && islandState === 'idle') {
-        changeState('device', false, 4000);
+      // CRITICAL OPTIMIZATION: Only update React state (triggering full render)
+      // if the hardware widget is visible, OR if CPU spikes above threshold
+      if (islandStateRef.current === 'device' || s.cpuUsage > 90) {
+        setSystemStats(s);
+        if (s.cpuUsage > 90 && islandStateRef.current === 'idle') {
+          changeState('device', false, 4000);
+        }
       }
-    }) || (() => {});
-    
-    return () => { u1(); u2(); u3(); if (uMedia) uMedia(); if (mediaInterval) clearInterval(mediaInterval); };
-  }, [changeState, islandState]);
+    }) || (() => { });
+
+    // State sync from backend
+    const uState = api.onStateChanged?.((s: any) => {
+      changeState(s, false);
+    }) || (() => { });
+
+    return () => { u1(); u2(); u3(); uState(); if (uMedia) uMedia(); if (mediaInterval) clearInterval(mediaInterval); if (mediaHealthTimeoutRef.current) clearTimeout(mediaHealthTimeoutRef.current); };
+  }, [changeState]);
 
   // ── Desktop Drag-and-Drop Suction ─────────────────────────────────────────
+  const dragCounterRef = useRef(0);
   useEffect(() => {
-    let dragCounter = 0;
-    
     const handleDragEnter = (e: DragEvent) => {
       e.preventDefault();
-      dragCounter++;
-      if (islandState !== 'dropzone') {
+      dragCounterRef.current++;
+      if (islandStateRef.current !== 'dropzone') {
         changeState('dropzone', true);
       }
     };
-    
+
     const handleDragLeave = (e: DragEvent) => {
       e.preventDefault();
-      dragCounter--;
-      if (dragCounter === 0 && islandState === 'dropzone') {
-        changeState('idle');
+      dragCounterRef.current--;
+      if (dragCounterRef.current === 0 && islandStateRef.current === 'dropzone') {
+        if (timerRef.current) changeState('timer', false);
+        else if (mediaDataRef.current?.playbackStatus === 'Playing') changeState('music', false);
+        else changeState('idle');
       }
     };
-    
+
     const handleDrop = (e: DragEvent) => {
       e.preventDefault();
-      dragCounter = 0;
+      dragCounterRef.current = 0;
       if (e.dataTransfer && e.dataTransfer.files.length > 0) {
         const file = e.dataTransfer.files[0];
         // Now holds the file in the "Shelf" until dismissed, instead of just saying "shared"
         setSharedFile({ name: file.name, size: (file.size / 1024 / 1024).toFixed(1) + 'MB' });
         changeState('shared', false); // No auto-revert! The user must swipe or drag it out.
       } else {
-        changeState('idle');
+        if (timerRef.current) changeState('timer', false);
+        else if (mediaDataRef.current?.playbackStatus === 'Playing') changeState('music', false);
+        else changeState('idle');
       }
     };
-    
+
     const handleDragOver = (e: DragEvent) => e.preventDefault();
 
     window.addEventListener('dragenter', handleDragEnter);
     window.addEventListener('dragleave', handleDragLeave);
     window.addEventListener('dragover', handleDragOver);
     window.addEventListener('drop', handleDrop);
-    
+
     return () => {
       window.removeEventListener('dragenter', handleDragEnter);
       window.removeEventListener('dragleave', handleDragLeave);
       window.removeEventListener('dragover', handleDragOver);
       window.removeEventListener('drop', handleDrop);
     };
-  }, [islandState, changeState]);
+  }, [changeState]);
 
   // Handle Root Level Volume Scroll
   const handleVolumeScroll = useCallback(() => {
-    if (islandState === 'idle' || islandState === 'volume') {
-      if (islandState === 'idle') changeState('volume', false, 1500);
-      else changeState('volume', false, 1500); // refresh timeout
+    if (islandStateRef.current === 'idle' || islandStateRef.current === 'volume') {
+      changeState('volume', false, 2000);
     }
-  }, [islandState, changeState]);
+  }, [changeState]);
 
   // ════════════════════════════════════════════════════════════════════════
   // NOTCH / WEB VIEW
@@ -270,7 +367,7 @@ export default function App() {
         <defs>
           <filter id="goo">
             <feGaussianBlur in="SourceGraphic" stdDeviation="10" result="blur" />
-            <feColorMatrix in="blur" mode="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 19 -9" result="goo" />
+            <feColorMatrix in="blur" mode="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 25 -12" result="goo" />
             <feComposite in="SourceGraphic" in2="goo" operator="atop" />
           </filter>
         </defs>
@@ -282,7 +379,7 @@ export default function App() {
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0 }}
           transition={{ type: 'spring', damping: 20 }}
-          className="w-full flex absolute z-50 pointer-events-none justify-center top-0"
+          className="absolute z-50 pointer-events-none left-1/2 -translate-x-1/2 top-0"
         >
           <motion.div
             layout
@@ -330,14 +427,14 @@ export default function App() {
               setVolumeLevel={(v) => {
                 setVolumeLevel(v);
                 const api = getDesktopApi();
-                if (api) api.setVolume(v).catch(() => {});
+                if (api) api.setVolume(v).catch(() => { });
               }}
               onVolumeScroll={handleVolumeScroll}
               onHoverPeek={(hover) => {
-                 // Hover to auto-expand or subtle scale
-                 if (hover && !isExpanded && EXPANDABLE_STATES.includes(islandState)) {
-                    // Optional hover behavior
-                 }
+                // Hover to auto-expand or subtle scale
+                if (hover && !isExpanded && EXPANDABLE_STATES.includes(islandState)) {
+                  // Optional hover behavior
+                }
               }}
               scaleModifier={1}
               yOffset={0}
@@ -352,6 +449,7 @@ export default function App() {
                 if (api && api.toggleNetwork) api.toggleNetwork(type, state);
               }}
               mediaData={mediaData}
+              timerSecs={timerSecs}
               onMediaControl={(action, payload) => {
                 const api = getDesktopApi();
                 if (!api) return;
