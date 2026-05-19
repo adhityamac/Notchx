@@ -18,7 +18,9 @@ function liquidClass(state: string): string {
 export type IslandState = 'idle' | 'music' | 'timer' | 'call' | 'notification' | 'battery' | 'download' | 'device' | 'split' | 'copied' | 'shared' | 'volume' | 'weather' | 'calendar' | 'control_center' | 'dropzone' | 'voice_chat' | 'notification_stack';
 
 export interface DynamicIslandProps {
+  isGhosted?: boolean;
   activeState: IslandState;
+  secondaryState?: IslandState | null;
   onClick?: () => void;
   isExpanded?: boolean;
   focusMode?: boolean;
@@ -104,7 +106,7 @@ const springTransition = {
 };
 
 export const DynamicIsland = ({
-  activeState, onClick, isExpanded, focusMode,
+  isGhosted, activeState, secondaryState, onClick, isExpanded, focusMode,
   cameraActive, micActive, copiedText, volumeLevel = 50, setVolumeLevel, onHoverPeek,
   scaleModifier = 1, yOffset = 0, theme = 'dark', actualBattery = 100, designMode = false,
   onVolumeScroll, systemStats, weatherData, sharedFile, onToggleNetwork, mediaData, onMediaControl
@@ -197,7 +199,12 @@ export const DynamicIsland = ({
         </svg>
         <motion.div
           className="relative z-50 flex gap-2 pointer-events-none items-center justify-center h-10"
-          style={{ top: baseStyle.top, filter: 'url(#goo)' }}
+          style={{
+            top: baseStyle.top,
+            filter: 'url(#goo)',
+            opacity: isGhosted ? 0.3 : 1,
+            pointerEvents: isGhosted ? 'none' : 'none'
+          }}
         >
           <motion.div
             layout
@@ -226,15 +233,54 @@ export const DynamicIsland = ({
     );
   }
 
+  const isSplit = secondaryState !== null && secondaryState !== undefined;
+  const splitWidth = 44; // Circular split pill
+  const gap = 12; // Gap between primary and secondary
+
   return (
-    <motion.div
-      ref={islandRef}
-      layout
+    <>
+      <AnimatePresence>
+      {isSplit && (
+        <motion.div
+          key="split-pill"
+          initial={{ opacity: 0, scale: 0.5, x: 0 }}
+          animate={{ opacity: 1, scale: 1, x: (currentWidth / 2) + gap + (splitWidth / 2) }}
+          exit={{ opacity: 0, scale: 0.5, x: 0 }}
+          transition={springTransition}
+          className="absolute top-0 bg-[#000000] text-white overflow-hidden pointer-events-auto flex items-center justify-center shadow-[0_10px_30px_rgba(0,0,0,0.5)]"
+          style={{
+            width: splitWidth,
+            height: 44,
+            borderRadius: 24,
+            opacity: isGhosted ? 0.4 : 1,
+            pointerEvents: isGhosted ? 'none' : 'auto'
+          }}
+        >
+          <AnimatePresence mode="popLayout">
+            {secondaryState === 'music' && (
+              <motion.div key="music-split" initial={{scale:0}} animate={{scale:1}} exit={{scale:0}}>
+                <img src={mediaData?.thumbnail || "https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?q=80&w=100&auto=format&fit=crop"} className="w-8 h-8 rounded-full object-cover animate-[spin_4s_linear_infinite]" alt="Album Art" />
+              </motion.div>
+            )}
+            {secondaryState === 'timer' && (
+              <motion.div key="timer-split" initial={{scale:0}} animate={{scale:1}} exit={{scale:0}} className="text-orange-500 flex items-center justify-center">
+                <Timer size={20} strokeWidth={2.5} />
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </motion.div>
+      )}
+      </AnimatePresence>
+
+      <motion.div
+        ref={islandRef}
+        layout
       initial={false}
       animate={{
         width: currentWidth,
         height: baseStyle.height,
         borderRadius: baseStyle.borderRadius,
+        border: '1px solid var(--ambient-border)',
         top: (baseStyle.top as number) + yOffset,
         boxShadow: isDraggedOver ? '0px 0px 40px rgba(59,130,246,0.6)' : currentGlow,
         scale: (isDraggedOver ? 1.05 : 1) * scaleModifier
@@ -292,6 +338,7 @@ export const DynamicIsland = ({
         {activeState === 'notification_stack' && <NotificationStackContent key="notification_stack" isExpanded={isExpanded} />}
       </AnimatePresence>
     </motion.div>
+    </>
   );
 };
 

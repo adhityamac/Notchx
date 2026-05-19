@@ -8,6 +8,8 @@ import {
 
 export default function App() {
   const [islandState, setIslandState] = useState<IslandState>('idle');
+  // UX Architecture: Concurrent State Engine
+  const [secondaryState, setSecondaryState] = useState<IslandState | null>(null);
   const [isExpanded, setIsExpanded] = useState(false);
   const constraintsRef = useRef<HTMLDivElement>(null);
 
@@ -25,6 +27,34 @@ export default function App() {
 
   const [alignment, setAlignment] = useState<AlignPreset>('top-center');
 
+  // UX: Anti-Intrusion Engine
+  const [isGhosted, setIsGhosted] = useState(false);
+  const mouseVelocityRef = useRef({ x: 0, y: 0, lastTime: Date.now() });
+
+  useEffect(() => {
+    let lastY = 0;
+    const handleMouseMove = (e: MouseEvent) => {
+      const now = Date.now();
+      const dt = now - mouseVelocityRef.current.lastTime;
+      if (dt > 0) {
+        const velocityY = (e.clientY - lastY) / dt;
+
+        // If moving mouse rapidly towards the top of the screen (browser tabs), and not interacting with the island
+        if (e.clientY < 60 && velocityY < -1.5 && islandState === 'idle') {
+          setIsGhosted(true);
+        } else if (e.clientY > 100) {
+          setIsGhosted(false);
+        }
+
+        lastY = e.clientY;
+        mouseVelocityRef.current.lastTime = now;
+      }
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    return () => window.removeEventListener('mousemove', handleMouseMove);
+  }, [islandState]);
+
   // ── Resize notch window on every state/expand change ────────────────────
   const resizeForState = useCallback((state: IslandState, expanded: boolean) => {
     const api = getDesktopApi();
@@ -36,6 +66,12 @@ export default function App() {
 
   // ── Change state ─────────────────────────────────────────────────────────
   const changeState = useCallback((s: IslandState, expanded = false, autoRevert = 0) => {
+    // If a priority state comes in while music/timer is active, move music/timer to secondary state.
+    if ((s === 'battery' || s === 'notification' || s === 'volume') && (islandState === 'music' || islandState === 'timer')) {
+      setSecondaryState(islandState);
+    } else if (s === 'idle') {
+      setSecondaryState(null);
+    }
     if (s !== 'timer' && timerRef.current) {
       clearInterval(timerRef.current); timerRef.current = null; setTimerSecs(0);
     }
@@ -54,9 +90,16 @@ export default function App() {
     if (autoRevert > 0) {
       contextTimeoutRef.current = setTimeout(() => {
         // Evaluate autonomous priority state after revert
-        if (actualBattery < 20) changeState('battery');
-        else if (systemStats.cpuUsage > 85) changeState('device');
-        else changeState('idle');
+        if (secondaryState) {
+          changeState(secondaryState);
+          setSecondaryState(null);
+        } else if (actualBattery < 20) {
+          changeState('battery');
+        } else if (systemStats.cpuUsage > 85) {
+          changeState('device');
+        } else {
+          changeState('idle');
+        }
       }, autoRevert);
     }
   }, [resizeForState, actualBattery, systemStats.cpuUsage]);
@@ -186,8 +229,9 @@ export default function App() {
       dragCounter = 0;
       if (e.dataTransfer && e.dataTransfer.files.length > 0) {
         const file = e.dataTransfer.files[0];
+        // Now holds the file in the "Shelf" until dismissed, instead of just saying "shared"
         setSharedFile({ name: file.name, size: (file.size / 1024 / 1024).toFixed(1) + 'MB' });
-        changeState('shared', false, 3500);
+        changeState('shared', false); // No auto-revert! The user must swipe or drag it out.
       } else {
         changeState('idle');
       }
@@ -242,17 +286,40 @@ export default function App() {
         >
           <motion.div
             layout
-            className="pointer-events-auto relative"
-            drag={false}
+            className="pointer-events-auto relative group"
+            style={{
+              // Fallback border that is barely visible on dark backgrounds, but defines the edge clearly on true-black or complex wallpapers
+              '--ambient-border': 'rgba(255, 255, 255, 0.08)'
+            } as React.CSSProperties}
             dragConstraints={constraintsRef}
             dragMomentum={false}
             dragElastic={0.1}
             onDragStart={() => setAlignment('custom')}
+            drag="x"
+            dragDirectionLock
+            onDragEnd={(e, info) => {
+              if (Math.abs(info.velocity.x) > 500 || Math.abs(info.offset.x) > 100) {
+                // Swipe detected
+                if (info.offset.x > 0) {
+                  // Swipe Right -> Next Widget
+                  if (islandState === 'weather') changeState('calendar');
+                  else if (islandState === 'calendar') changeState('music');
+                  else if (islandState === 'music') changeState('idle');
+                } else {
+                  // Swipe Left -> Prev Widget
+                  if (islandState === 'idle') changeState('music');
+                  else if (islandState === 'music') changeState('calendar');
+                  else if (islandState === 'calendar') changeState('weather');
+                }
+              }
+            }}
             animate={{ x: 0, y: 0 }}
             transition={{ type: 'spring', stiffness: 300, damping: 30 }}
           >
             <DynamicIsland
+              isGhosted={isGhosted}
               activeState={islandState}
+              secondaryState={secondaryState}
               onClick={toggleExpand}
               isExpanded={isExpanded}
               focusMode={false}
