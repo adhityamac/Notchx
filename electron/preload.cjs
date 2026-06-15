@@ -35,6 +35,7 @@ contextBridge.exposeInMainWorld('notchXDesktop', {
   setMediaShuffle: (state) => ipcRenderer.invoke('media:shuffle', state),
   setMediaRepeat: (mode) => ipcRenderer.invoke('media:repeat', mode),
   seekMediaTrack: (posSeconds) => ipcRenderer.invoke('media:seek', posSeconds),
+  startDrag: (fileName) => ipcRenderer.send('drag-start', fileName),
 
   // ── Push listeners ────────────────────────────────────────────────────────
   onMediaKey: (cb) => {

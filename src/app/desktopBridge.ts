@@ -58,6 +58,7 @@ export interface DesktopBridge {
   setMediaShuffle?:  (state: boolean)                        => Promise<void>;
   setMediaRepeat?:   (mode: 'off' | 'one' | 'all')           => Promise<void>;
   seekMediaTrack?:   (posSeconds: number)                    => Promise<void>;
+  startDrag?:        (filePath: string)                      => void;
   onBatteryUpdate:   (cb: (d: { percentage: number; is_charging: boolean }) => void) => () => void;
   onMediaKey:        (cb: (key: string) => void)   => () => void;
   onMediaUpdate?:    (cb: (m: any) => void)        => () => void;

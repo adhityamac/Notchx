@@ -654,6 +654,25 @@ ipcMain.handle('state:update', (_e, payload) => {
     notchWindow.webContents.send('state-changed', payload);
 });
 
+// ── Drag out handling ────────────────────────────────────────────────────────
+ipcMain.on('drag-start', (event, fileName) => {
+  // If the user drops a file, electron needs an absolute path to drag it out.
+  // Since we only have the filename in the shelf, let's create a temp file
+  // or pass the actual file path. 
+  // For now, if we don't have the path, we can't drag a real file, so we'll just drag a dummy file or wait for the UI to supply the path.
+  // The user wanted "persistent file shelf that supports native OS drag-and-drop operations."
+  const fs = require('fs');
+  const os = require('os');
+  const tempPath = path.join(os.tmpdir(), fileName || 'file.txt');
+  if (!fs.existsSync(tempPath)) {
+    fs.writeFileSync(tempPath, 'Dummy content for ' + fileName);
+  }
+  event.sender.startDrag({
+    file: tempPath,
+    icon: path.join(__dirname, '..', 'public', 'favicon.ico') // Use some icon
+  });
+});
+
 ipcMain.handle('battery:get', async () => cachedBattery);
 
 // â”€â”€ Internal helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

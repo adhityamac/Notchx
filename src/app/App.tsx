@@ -16,7 +16,7 @@ export default function App() {
   // UX Architecture: Non-Destructive Priority Queue
   // A ref-based stack avoids stale closure bugs in setTimeout callbacks.
   // secondaryState (useState) is the RENDER value — updated whenever the queue changes.
-  const stateQueueRef = useRef<IslandState[]>([]);
+  const stateQueueRef = useRef<{state: IslandState, expanded: boolean}[]>([]);
   const [secondaryState, setSecondaryState] = useState<IslandState | null>(null);
   const [isExpanded, setIsExpanded] = useState(false);
   const constraintsRef = useRef<HTMLDivElement>(null);
@@ -32,7 +32,7 @@ export default function App() {
   const mediaHealthTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [weatherData, setWeatherData] = useState<WeatherData | null>(null);
-  const [sharedFile, setSharedFile] = useState<{ name: string, size: string } | null>(null);
+  const [sharedFile, setSharedFile] = useState<{ name: string, size: string, path?: string } | null>(null);
 
   const [alignment, setAlignment] = useState<AlignPreset>('top-center');
 
@@ -73,15 +73,14 @@ export default function App() {
         const velocityY = (e.clientY - lastY) / dt;
         const velocityX = (e.clientX - lastX) / dt;
 
-        // Ghost if moving fast (any axis) within 40px of top — covers both
-        // rapid upward strokes AND horizontal tab-bar navigation
-        if (e.clientY < 40 && (Math.abs(velocityY) > 0.8 || Math.abs(velocityX) > 2.0) && islandStateRef.current === 'idle') {
+        // Ghost if moving into the top 20px "titlebar zone" (unless we are interacting with the island)
+        if ((e.clientY < 20 || (e.clientY < 40 && (Math.abs(velocityY) > 0.8 || Math.abs(velocityX) > 2.0))) && islandStateRef.current === 'idle') {
           setIsGhosted(true);
           if (ghostTimeout) clearTimeout(ghostTimeout);
           ghostTimeout = setTimeout(() => {
             setIsGhosted(false);
-          }, 800); // Snap back quickly once user settles on a tab
-        } else if (e.clientY > 80) {
+          }, 1200);
+        } else if (e.clientY > 60) {
           setIsGhosted(false);
           if (ghostTimeout) clearTimeout(ghostTimeout);
         }
@@ -122,19 +121,18 @@ export default function App() {
     // Transient alerts (battery, notification, volume) push the CURRENT
     // context onto a stack so it can be restored when the alert reverts,
     // instead of permanently overwriting it.
-    const ALERT_STATES: IslandState[] = ['battery', 'notification', 'volume'];
-    if (ALERT_STATES.includes(s) && !ALERT_STATES.includes(islandStateRef.current)) {
-      // Push the current non-alert state so we can restore it later
-      stateQueueRef.current = [islandStateRef.current, ...stateQueueRef.current].slice(0, 4);
+    const TRANSIENT_STATES: IslandState[] = ['battery', 'notification', 'volume', 'device', 'copied', 'shared', 'dropzone'];
+    if (TRANSIENT_STATES.includes(s) && !TRANSIENT_STATES.includes(islandStateRef.current)) {
+      if (islandStateRef.current !== 'idle') {
+        stateQueueRef.current = [{ state: islandStateRef.current, expanded: isExpanded }, ...stateQueueRef.current].slice(0, 4);
+      }
     } else if (s === 'idle') {
-      // Clearing to idle flushes the entire queue
       stateQueueRef.current = [];
-    } else if (!ALERT_STATES.includes(s)) {
-      // Any deliberate non-alert navigation clears the queue too
+    } else if (!TRANSIENT_STATES.includes(s)) {
       stateQueueRef.current = [];
     }
     // Sync render value to queue head
-    setSecondaryState(stateQueueRef.current[0] ?? null);
+    setSecondaryState(stateQueueRef.current[0]?.state ?? null);
 
     const isTemporary = ['volume', 'battery', 'shared', 'device', 'dropzone', 'copied'].includes(s);
     if (!isTemporary && s !== 'timer' && timerRef.current) {
@@ -158,8 +156,8 @@ export default function App() {
         const restored = stateQueueRef.current[0];
         if (restored) {
           stateQueueRef.current = stateQueueRef.current.slice(1);
-          setSecondaryState(stateQueueRef.current[0] ?? null);
-          changeState(restored);
+          setSecondaryState(stateQueueRef.current[0]?.state ?? null);
+          changeState(restored.state, restored.expanded);
         } else if (timerRef.current) {
           changeState('timer', false);
         } else if (mediaDataRef.current && mediaDataRef.current.playbackStatus === 'Playing') {
@@ -346,7 +344,7 @@ export default function App() {
       if (e.dataTransfer && e.dataTransfer.files.length > 0) {
         const file = e.dataTransfer.files[0];
         // Now holds the file in the "Shelf" until dismissed, instead of just saying "shared"
-        setSharedFile({ name: file.name, size: (file.size / 1024 / 1024).toFixed(1) + 'MB' });
+        setSharedFile({ name: file.name, size: (file.size / 1024 / 1024).toFixed(1) + 'MB', path: file.path });
         changeState('shared', false); // No auto-revert! The user must swipe or drag it out.
       } else {
         if (timerRef.current) changeState('timer', false);
@@ -460,7 +458,7 @@ export default function App() {
                 }
               }}
               scaleModifier={1}
-              yOffset={0}
+              yOffset={isGhosted ? -60 : 0}
               theme={islandTheme}
               actualBattery={actualBattery}
               designMode={false}

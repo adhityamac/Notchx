@@ -1,0 +1,9 @@
+<USER_REQUEST>
+While we made the UI look incredibly beautiful and fluid with the last update, you are absolutely right to ask about the User Experience (UX). If this app is going to sit at the top of a user's screen all day, its UX architecture needs serious upgrades, otherwise, it will become annoying rather than helpful.
+
+Here are the 4 critical UX flaws currently in the app, and how we must upgrade them to achieve a true Apple-level experience:
+
+1. The "Intrusion" Flaw (Blocks Browser Tabs)
+The Problem: The notch sits exactly where browser tabs, search bars, and window controls live. Users will constantly accidentally click the island when trying to switch tabs, causing massive frustration.
+The UX Upgrade (Intelligent Evasion): Implement an "Anti-Intrusion" mouse velocity and proximity sensor. If the user's mouse moves quickly towards the top center (targeting a tab), the island instantly physically shrinks, ducks out of the way, or becomes "ghosted" (click-through) so it never blocks their workflow.
+<truncated 1840 bytes>

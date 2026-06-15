@@ -204,52 +204,6 @@ export const DynamicIsland = ({
     }
   };
 
-  // If it's split state, we render two separate islands
-  if (currentState === 'split') {
-    return (
-      <>
-        <svg width="0" height="0" className="absolute pointer-events-none">
-          <filter id="goo">
-            <feGaussianBlur in="SourceGraphic" stdDeviation="8" result="blur" />
-            <feColorMatrix in="blur" mode="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 20 -9" result="goo" />
-            <feBlend in="SourceGraphic" in2="goo" />
-          </filter>
-        </svg>
-        <motion.div
-          className="relative z-50 flex gap-2 pointer-events-none items-center justify-center h-10"
-          style={{
-            top: baseStyle.top,
-            filter: 'url(#goo)',
-            opacity: isGhosted ? 0.3 : 1,
-            pointerEvents: isGhosted ? 'none' : 'none'
-          }}
-        >
-          <motion.div
-            layout
-            transition={springTransition}
-            className="bg-[#000000] text-white overflow-hidden pointer-events-auto flex items-center px-4 gap-2 shadow-[0_10px_30px_rgba(0,0,0,0.5)]"
-            style={{ width: 160, height: 40, borderRadius: 24 }}
-          >
-            <img src="https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?q=80&w=100&auto=format&fit=crop" className="w-6 h-6 rounded-full" alt="Art" />
-            <div className="flex gap-0.5">
-              <TrueAudioVisualizer compact maxHeight={16} />
-            </div>
-          </motion.div>
-
-          <motion.div
-            layout
-            transition={springTransition}
-            className="bg-[#000000] text-white overflow-hidden pointer-events-auto flex items-center justify-center shadow-[0_8px_30px_rgba(249,115,22,0.2)]"
-            style={{ width: 80, height: 40, borderRadius: 24 }}
-          >
-            <div className="flex items-center gap-1 text-orange-500 font-medium text-sm">
-              <Timer size={14} /> 12:05
-            </div>
-          </motion.div>
-        </motion.div>
-      </>
-    );
-  }
 
   const isSplit = secondaryState !== null && secondaryState !== undefined;
   const splitWidth = 44; // Circular split pill
@@ -417,12 +371,12 @@ const IdleContent = forwardRef<HTMLDivElement>((props, ref) => {
         <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse shadow-[0_0_8px_#3b82f6]" />
         <span className="text-xs font-bold tracking-wider text-white/90">{time}</span>
       </div>
-      {/* Scroll-volume affordance hint — pure CSS opacity, zero JS overhead */}
-      <div className="affordance-hint flex items-center gap-1 pr-1" aria-hidden="true">
+      {/* Scroll-volume affordance hint — fades in on hover */}
+      <div className="affordance-hint flex items-center gap-1 pr-1 opacity-0 group-hover:opacity-100 transition-opacity duration-300" aria-hidden="true">
         <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-          <rect x="4" y="1" width="4" height="7" rx="2" stroke="currentColor" strokeWidth="1.2" className="text-white/50"/>
-          <line x1="6" y1="3" x2="6" y2="5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" className="text-white/50"/>
-          <path d="M3 9.5L6 11L9 9.5" stroke="currentColor" strokeWidth="1" strokeLinecap="round" className="text-white/40"/>
+          <rect x="4" y="1" width="4" height="7" rx="2" stroke="currentColor" strokeWidth="1.2" className="text-white/80"/>
+          <line x1="6" y1="3" x2="6" y2="5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" className="text-white/80 animate-pulse"/>
+          <path d="M3 9.5L6 11L9 9.5" stroke="currentColor" strokeWidth="1" strokeLinecap="round" className="text-white/60 animate-bounce"/>
         </svg>
       </div>
     </motion.div>
@@ -858,11 +812,8 @@ const CopiedContent = forwardRef<HTMLDivElement, { text?: string }>(({ text, ...
   </motion.div>
 ));
 
-// Feature 12: Drag & Drop Shared — Functional File Shelf
-// Files dropped IN show here; the row is draggable so users can drag OUT to
-// other apps (Explorer, email, etc.). A dismiss button clears the shelf.
-const SharedContent = forwardRef<HTMLDivElement, { file?: { name: string, size: string } | null; onDismiss?: () => void }>(
-  ({ file, onDismiss, ...props }, ref) => (
+// Feature 16: Shared Content
+const SharedContent = forwardRef<HTMLDivElement, { file: { name: string, size: string, path?: string } | null, onDismiss?: () => void }>(({ file, onDismiss, ...props }, ref) => (
   <motion.div
     ref={ref}
     initial={{ opacity: 0, scale: 0.9 }}
@@ -880,8 +831,11 @@ const SharedContent = forwardRef<HTMLDivElement, { file?: { name: string, size: 
       draggable="true"
       title="Drag to share · × to clear"
       onDragStart={(e) => {
-        e.dataTransfer.effectAllowed = 'copy';
-        e.dataTransfer.setData('text/plain', file?.name || 'File');
+        e.preventDefault();
+        const api = (window as any).notchXDesktop;
+        if (api && api.startDrag && file) {
+          api.startDrag(file.path || file.name);
+        }
       }}
     >
       <span className="text-emerald-400 font-bold text-sm tracking-wide drop-shadow-[0_0_5px_rgba(52,211,153,0.4)] truncate">
