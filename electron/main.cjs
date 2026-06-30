@@ -88,11 +88,15 @@ function createNotchWindow() {
 
   notchWindow.setMenuBarVisibility(false);
   notchWindow.setAlwaysOnTop(true, 'screen-saver');
+  // Enable ignore mouse events by default at startup (clickThrough starts as true)
+  notchWindow.setIgnoreMouseEvents(true, { forward: true });
+  clickThrough = true;
   notchWindow.loadURL(rendererUrl('notch'));
+
   notchWindow.on('closed', () => { notchWindow = null; });
 }
 
-// â”€â”€ Battery â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Battery ──────────────────────────────────────────────────────────────────
 async function readBattery() {
   try {
     const d = await si.battery();
@@ -209,11 +213,13 @@ ipcMain.handle('overlay:alignWindow', (_e, { preset, width }) => {
     activePreset = preset;
   }
 
-  const { bounds } = screen.getPrimaryDisplay();
+  const winBounds = notchWindow.getBounds();
+  const display = screen.getDisplayNearestPoint({ x: winBounds.x + winBounds.width / 2, y: winBounds.y });
+  const bounds = display.bounds;
   const currentSize = notchWindow.getSize(); // [width, height]
   const w = width ?? currentSize[0];
   const h = currentSize[1];
-  const x = calcX(activePreset, w);
+  const x = calcX(activePreset, w, bounds);
   const y = bounds.y;
 
   safeLog(`[Main] alignWindow preset=${activePreset} x=${x} y=${y} w=${w}`);
@@ -228,23 +234,25 @@ ipcMain.handle('overlay:alignWindow', (_e, { preset, width }) => {
 // â”€â”€ overlay:resize â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Called on every state transition.  Uses the STORED preset to recalculate
 // x so the pill stays in the correct position as it grows/shrinks.
-// Single setBounds call â†’ tear-free repaint.
+// Single setBounds call → tear-free repaint.
 ipcMain.handle('overlay:resize', (_e, size) => {
   if (!notchWindow || notchWindow.isDestroyed()) return;
 
-  const { bounds } = screen.getPrimaryDisplay();
+  const winBounds = notchWindow.getBounds();
+  const display = screen.getDisplayNearestPoint({ x: winBounds.x + winBounds.width / 2, y: winBounds.y });
+  const bounds = display.bounds;
 
-  // Accept the frontend values directly â€” no artificial floor of IDLE_W that would
+  // Accept the frontend values directly — no artificial floor of IDLE_W that would
   // over-widen small-pill states. Only guard against garbage (< 100).
   const w = Math.round(Number(size?.width) || IDLE_W);
   const h = Math.round(Number(size?.height) || IDLE_H);
 
   const x = activePreset === 'custom'
     ? notchWindow.getBounds().x
-    : calcX(activePreset, w);
+    : calcX(activePreset, w, bounds);
   const y = bounds.y;
 
-  safeLog(`[Main] resize preset=${activePreset} â†’ w=${w} h=${h} x=${x} y=${y}`);
+  safeLog(`[Main] resize preset=${activePreset} → w=${w} h=${h} x=${x} y=${y}`);
   notchWindow.setBounds({ x, y, width: w, height: h }, false);
 });
 
@@ -308,8 +316,94 @@ ipcMain.handle('network:toggle', async (_e, { type, state }) => {
   });
 });
 
-// â”€â”€ overlay:setPosition â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// Manual drag in design mode â†’ switches preset to 'custom'.
+// ── system:getSettings / system:toggleDnd ────────────────────────────────────
+ipcMain.handle('system:getSettings', async () => {
+  const { spawn } = require('child_process');
+  const script = `
+    Add-Type -AssemblyName System.Runtime.WindowsRuntime
+    [void][Windows.Devices.Radios.Radio,Windows.System.Devices,ContentType=WindowsRuntime]
+    $radios = [Windows.Devices.Radios.Radio]::GetRadiosAsync().GetResults()
+    $wifi = $radios | Where-Object { $_.Kind -eq 'WiFi' }
+    $bt = $radios | Where-Object { $_.Kind -eq 'Bluetooth' }
+    $wifiOn = if ($wifi) { $wifi.State -eq 'On' } else { $true }
+    $btOn = if ($bt) { $bt.State -eq 'On' } else { $true }
+    $dndVal = Get-ItemPropertyValue -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings' -Name 'NOC_GLOBAL_SETTING_TOASTS_ENABLED' -ErrorAction SilentlyContinue
+    $dndOn = if ($null -eq $dndVal) { $false } else { $dndVal -eq 0 }
+    @{ wifi = $wifiOn; bluetooth = $btOn; dnd = $dndOn } | ConvertTo-Json -Compress
+  `;
+  return new Promise((resolve) => {
+    const proc = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script]);
+    let out = '';
+    proc.stdout.on('data', (d) => { out += d.toString(); });
+    proc.on('close', () => {
+      try {
+        resolve(JSON.parse(out.trim()));
+      } catch (e) {
+        resolve({ wifi: true, bluetooth: true, dnd: false });
+      }
+    });
+  });
+});
+
+ipcMain.handle('system:toggleDnd', async (_e, state) => {
+  const { spawn } = require('child_process');
+  const val = state ? 0 : 1;
+  const script = `Set-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings' -Name 'NOC_GLOBAL_SETTING_TOASTS_ENABLED' -Value ${val} -Type DWord`;
+  return new Promise((resolve) => {
+    const proc = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script]);
+    proc.on('close', (code) => { resolve(code === 0); });
+  });
+});
+
+// ── Local Calendar & Task Sync ───────────────────────────────────────────────
+const TASKS_FILE = path.join(app.getPath('userData'), 'notchx_tasks.json');
+
+function readTasks() {
+  if (!fs.existsSync(TASKS_FILE)) {
+    // Default initial design sync tasks
+    return [
+      { id: '1', title: 'Design Sync', time: '10:00 AM - 10:30 AM', isTeams: true, link: 'msteams://' }
+    ];
+  }
+  try {
+    return JSON.parse(fs.readFileSync(TASKS_FILE, 'utf8'));
+  } catch (e) {
+    return [];
+  }
+}
+
+function writeTasks(tasks) {
+  try {
+    fs.writeFileSync(TASKS_FILE, JSON.stringify(tasks, null, 2), 'utf8');
+  } catch (e) {
+    console.error('Failed to write tasks:', e);
+  }
+}
+
+ipcMain.handle('calendar:getTasks', () => {
+  return readTasks();
+});
+
+ipcMain.handle('calendar:addTask', (_e, task) => {
+  const tasks = readTasks();
+  tasks.push(task);
+  writeTasks(tasks);
+  return tasks;
+});
+
+ipcMain.handle('calendar:launchMeeting', async (_e, link) => {
+  const { shell } = require('electron');
+  try {
+    if (link) {
+      await shell.openExternal(link);
+    }
+  } catch (e) {
+    console.error('Failed to launch meeting URL:', e);
+  }
+});
+
+// ── overlay:setPosition ──────────────────────────────────────────────────────
+// Manual drag in design mode → switches preset to 'custom'.
 ipcMain.handle('overlay:setPosition', (_e, pos) => {
   if (!notchWindow || notchWindow.isDestroyed()) return;
   activePreset = 'custom'; // user manually positioned it
@@ -654,26 +748,33 @@ ipcMain.handle('state:update', (_e, payload) => {
     notchWindow.webContents.send('state-changed', payload);
 });
 
-// ── Drag out handling ────────────────────────────────────────────────────────
-ipcMain.on('drag-start', (event, fileName) => {
-  // If the user drops a file, electron needs an absolute path to drag it out.
-  // Since we only have the filename in the shelf, let's create a temp file
-  // or pass the actual file path. 
-  // For now, if we don't have the path, we can't drag a real file, so we'll just drag a dummy file or wait for the UI to supply the path.
-  // The user wanted "persistent file shelf that supports native OS drag-and-drop operations."
-  const fs = require('fs');
-  const os = require('os');
-  const tempPath = path.join(os.tmpdir(), fileName || 'file.txt');
-  if (!fs.existsSync(tempPath)) {
-    fs.writeFileSync(tempPath, 'Dummy content for ' + fileName);
-  }
-  event.sender.startDrag({
-    file: tempPath,
-    icon: path.join(__dirname, '..', 'public', 'favicon.ico') // Use some icon
-  });
-});
-
 ipcMain.handle('battery:get', async () => cachedBattery);
+
+// ── drag:start ──────────────────────────────────────────────────────────────
+ipcMain.handle('drag:start', async (event, { filePath }) => {
+  const fs = require('fs');
+  const { nativeImage } = require('electron');
+  
+  if (!filePath || !fs.existsSync(filePath)) {
+    safeLog(`[Drag] File does not exist or empty: ${filePath}`);
+    return;
+  }
+
+  try {
+    const icon = await app.getFileIcon(filePath, { size: 'normal' });
+    event.sender.startDrag({
+      file: filePath,
+      icon: icon
+    });
+  } catch (err) {
+    safeLog(`[Drag] Failed to get file icon: ${err.message}`);
+    // Fallback: start drag with an empty/transparent native image
+    event.sender.startDrag({
+      file: filePath,
+      icon: nativeImage.createEmpty()
+    });
+  }
+});
 
 // â”€â”€ Internal helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function broadcastPosition() {

@@ -2,6 +2,7 @@ import { motion, AnimatePresence, useMotionValue, useSpring, useAnimationFrame, 
 import { useState, useEffect, forwardRef, useRef } from 'react';
 import { Phone, PhoneOff, Timer, Bell, BatteryCharging, Download, Bluetooth, Send, Copy, Share2, Volume2, Mic, Wind, Droplets, Calendar as CalendarIcon, Video, Wifi, Moon, Sun, Cloud, BatteryMedium, BatteryFull, BatteryLow, FileUp, CheckCircle2, Activity, Users, MessageSquare, Mail, HardDrive, Shuffle, Repeat } from 'lucide-react';
 import { TrueAudioVisualizer } from './TrueAudioVisualizer';
+import { getDesktopApi } from '../desktopBridge';
 
 // ── Liquid-bg helper: maps an island state to its CSS tint modifier ──────────
 function liquidClass(state: string): string {
@@ -53,8 +54,12 @@ export interface DynamicIslandProps {
   systemStats?: { cpuUsage: number, ramUsage: number, totalMemStr: string };
   onVolumeScroll?: () => void;
   weatherData?: WeatherData | null;
-  sharedFile?: { name: string, size: string } | null;
-  onToggleNetwork?: (type: 'wifi' | 'bluetooth', state: boolean) => void;
+  sharedFile?: { name: string, size: string, path?: string } | null;
+  systemSettings?: { wifi: boolean, bluetooth: boolean, dnd: boolean };
+  onToggleSetting?: (type: 'wifi' | 'bluetooth' | 'dnd', state: boolean) => void;
+  calendarTasks?: { id: string, title: string, time: string, isTeams?: boolean, link?: string }[];
+  onAddCalendarTask?: (title: string) => void;
+  onLaunchMeeting?: (link: string) => void;
   mediaData?: MediaData | null;
   onMediaControl?: (action: string, payload?: any) => void;
   timerSecs?: number;
@@ -126,7 +131,8 @@ export const DynamicIsland = ({
   isGhosted, activeState, secondaryState, onClick, onDoubleClick, isExpanded, focusMode,
   cameraActive, micActive, copiedText, volumeLevel = 50, setVolumeLevel, onHoverPeek,
   scaleModifier = 1, yOffset = 0, theme = 'dark', actualBattery = 100, designMode = false,
-  onVolumeScroll, systemStats, weatherData, sharedFile, onToggleNetwork, mediaData, onMediaControl,
+  onVolumeScroll, systemStats, weatherData, sharedFile, systemSettings, onToggleSetting,
+  calendarTasks, onAddCalendarTask, onLaunchMeeting, mediaData, onMediaControl,
   timerSecs = 0, onDismissShared
 }: DynamicIslandProps) => {
 
@@ -145,11 +151,14 @@ export const DynamicIsland = ({
   const currentGlow = focusMode ? 'none' : (glowStyles[currentState] || glowStyles.default);
   const currentWidth = (focusMode && typeof baseStyle.width === 'number') ? baseStyle.width * 0.9 : baseStyle.width;
 
-  // Re-triggering HMR
   const isLightMode = theme === 'light';
 
-  // Feature 4: Cursor Magnetism
+  // Feature 4: Cursor Magnetism & Dynamic Click-Through
   const islandRef = useRef<HTMLDivElement>(null);
+  const splitWrapperRef = useRef<HTMLDivElement>(null);
+  const splitPillRef = useRef<HTMLDivElement>(null);
+  const clickThroughRef = useRef(true);
+
   const mouseX = useMotionValue(0);
   const mouseY = useMotionValue(0);
 
@@ -159,27 +168,69 @@ export const DynamicIsland = ({
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
-      if (!islandRef.current) return;
-      const rect = islandRef.current.getBoundingClientRect();
-      const centerX = rect.left + rect.width / 2;
-      const centerY = rect.top + rect.height / 2;
+      // 1. Cursor Magnetism Calculations
+      if (islandRef.current) {
+        const rect = islandRef.current.getBoundingClientRect();
+        const centerX = rect.left + rect.width / 2;
+        const centerY = rect.top + rect.height / 2;
 
-      const distanceX = e.clientX - centerX;
-      const distanceY = e.clientY - centerY;
+        const distanceX = e.clientX - centerX;
+        const distanceY = e.clientY - centerY;
 
-      // If mouse is within 200px, attract slightly
-      if (Math.abs(distanceX) < 200 && Math.abs(distanceY) < 100) {
-        mouseX.set(distanceX * 0.05); // 5% pull
-        mouseY.set(distanceY * 0.1);
-      } else {
-        mouseX.set(0);
-        mouseY.set(0);
+        if (Math.abs(distanceX) < 200 && Math.abs(distanceY) < 100) {
+          mouseX.set(distanceX * 0.05); // 5% pull
+          mouseY.set(distanceY * 0.1);
+        } else {
+          mouseX.set(0);
+          mouseY.set(0);
+        }
+      }
+
+      // 2. Hit-testing for Dynamic Click-Through (Task 1: Spatial Intrusion Fix)
+      const api = getDesktopApi();
+      if (api) {
+        let isOver = false;
+        const BUFFER = 2; // small edge margin
+        const isSplit = secondaryState !== null && secondaryState !== undefined;
+
+        if (currentState === 'split' && splitWrapperRef.current) {
+          const rect = splitWrapperRef.current.getBoundingClientRect();
+          isOver = (
+            e.clientX >= rect.left - BUFFER &&
+            e.clientX <= rect.right + BUFFER &&
+            e.clientY >= rect.top - BUFFER &&
+            e.clientY <= rect.bottom + BUFFER
+          );
+        } else if (islandRef.current) {
+          const rect = islandRef.current.getBoundingClientRect();
+          isOver = (
+            e.clientX >= rect.left - BUFFER &&
+            e.clientX <= rect.right + BUFFER &&
+            e.clientY >= rect.top - BUFFER &&
+            e.clientY <= rect.bottom + BUFFER
+          );
+          if (!isOver && isSplit && splitPillRef.current) {
+            const splitRect = splitPillRef.current.getBoundingClientRect();
+            isOver = (
+              e.clientX >= splitRect.left - BUFFER &&
+              e.clientX <= splitRect.right + BUFFER &&
+              e.clientY >= splitRect.top - BUFFER &&
+              e.clientY <= splitRect.bottom + BUFFER
+            );
+          }
+        }
+
+        const shouldIgnore = isGhosted || !isOver;
+        if (shouldIgnore !== clickThroughRef.current) {
+          clickThroughRef.current = shouldIgnore;
+          api.setClickThrough(shouldIgnore).catch(() => {});
+        }
       }
     };
 
     window.addEventListener('mousemove', handleMouseMove);
     return () => window.removeEventListener('mousemove', handleMouseMove);
-  }, [currentState, mouseX, mouseY]);
+  }, [currentState, mouseX, mouseY, secondaryState, isGhosted]);
 
   // Feature 12: Drag & Drop Sharing
   const [isDraggedOver, setIsDraggedOver] = useState(false);
@@ -204,6 +255,53 @@ export const DynamicIsland = ({
     }
   };
 
+  // If it's split state, we render two separate islands
+  if (currentState === 'split') {
+    return (
+      <>
+        <svg width="0" height="0" className="absolute pointer-events-none">
+          <filter id="goo">
+            <feGaussianBlur in="SourceGraphic" stdDeviation="8" result="blur" />
+            <feColorMatrix in="blur" mode="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 20 -9" result="goo" />
+            <feBlend in="SourceGraphic" in2="goo" />
+          </filter>
+        </svg>
+        <motion.div
+          ref={splitWrapperRef}
+          className="relative z-50 flex gap-2 pointer-events-none items-center justify-center h-10"
+          style={{
+            top: baseStyle.top,
+            filter: 'url(#goo)',
+            opacity: isGhosted ? 0.3 : 1,
+            pointerEvents: isGhosted ? 'none' : 'none'
+          }}
+        >
+          <motion.div
+            layout
+            transition={springTransition}
+            className="bg-[#000000] text-white overflow-hidden pointer-events-auto flex items-center px-4 gap-2 shadow-[0_10px_30px_rgba(0,0,0,0.5)]"
+            style={{ width: 160, height: 40, borderRadius: 24 }}
+          >
+            <img src="https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?q=80&w=100&auto=format&fit=crop" className="w-6 h-6 rounded-full" alt="Art" />
+            <div className="flex gap-0.5">
+              <TrueAudioVisualizer compact maxHeight={16} />
+            </div>
+          </motion.div>
+
+          <motion.div
+            layout
+            transition={springTransition}
+            className="bg-[#000000] text-white overflow-hidden pointer-events-auto flex items-center justify-center shadow-[0_8px_30px_rgba(249,115,22,0.2)]"
+            style={{ width: 80, height: 40, borderRadius: 24 }}
+          >
+            <div className="flex items-center gap-1 text-orange-500 font-medium text-sm">
+              <Timer size={14} /> 12:05
+            </div>
+          </motion.div>
+        </motion.div>
+      </>
+    );
+  }
 
   const isSplit = secondaryState !== null && secondaryState !== undefined;
   const splitWidth = 44; // Circular split pill
@@ -228,6 +326,7 @@ export const DynamicIsland = ({
       <AnimatePresence>
       {isSplit && (
         <motion.div
+          ref={splitPillRef}
           key="split-pill"
           initial={{ opacity: 0, scale: 0.5, x: 0 }}
           animate={{ opacity: 1, scale: 1, x: (currentWidth / 2) + gap + (splitWidth / 2) }}
@@ -290,7 +389,7 @@ export const DynamicIsland = ({
         pointerEvents: isGhosted ? 'none' : 'auto'
       }}
       className={`
-        backdrop-blur-xl overflow-hidden relative z-50
+        backdrop-blur-xl overflow-hidden relative z-50 group
         ${designMode ? 'cursor-grab active:cursor-grabbing border-2 border-dashed border-blue-500' : 'cursor-pointer'}
         ${isLightMode ? 'bg-white/90 text-black' : 'bg-[#000000] text-white'}
         ring-1 ${isLightMode ? 'ring-black/5' : 'ring-white/10'} flex items-center justify-center
@@ -320,8 +419,24 @@ export const DynamicIsland = ({
         {activeState === 'shared' && <SharedContent key="shared" file={sharedFile} onDismiss={onDismissShared} />}
         {activeState === 'volume' && <VolumeContent key="volume" level={volumeLevel} />}
         {activeState === 'weather' && <WeatherContent key="weather" isExpanded={isExpanded} data={weatherData} />}
-        {activeState === 'calendar' && <CalendarContent key="calendar" isExpanded={isExpanded} />}
-        {activeState === 'control_center' && <ControlCenterContent key="control_center" onToggle={onToggleNetwork} />}
+        {activeState === 'calendar' && (
+          <CalendarContent
+            key="calendar"
+            isExpanded={isExpanded}
+            tasks={calendarTasks}
+            onAddTask={onAddCalendarTask}
+            onLaunchMeeting={onLaunchMeeting}
+          />
+        )}
+        {activeState === 'control_center' && (
+          <ControlCenterContent
+            key="control_center"
+            wifi={systemSettings?.wifi}
+            bluetooth={systemSettings?.bluetooth}
+            dnd={systemSettings?.dnd}
+            onToggleSetting={onToggleSetting}
+          />
+        )}
         {activeState === 'dropzone' && <DropzoneContent key="dropzone" isExpanded={isExpanded} />}
         {activeState === 'voice_chat' && <VoiceChatContent key="voice_chat" isExpanded={isExpanded} />}
         {activeState === 'notification_stack' && <NotificationStackContent key="notification_stack" isExpanded={isExpanded} />}
@@ -371,12 +486,12 @@ const IdleContent = forwardRef<HTMLDivElement>((props, ref) => {
         <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse shadow-[0_0_8px_#3b82f6]" />
         <span className="text-xs font-bold tracking-wider text-white/90">{time}</span>
       </div>
-      {/* Scroll-volume affordance hint — fades in on hover */}
-      <div className="affordance-hint flex items-center gap-1 pr-1 opacity-0 group-hover:opacity-100 transition-opacity duration-300" aria-hidden="true">
+      {/* Scroll-volume affordance hint — pure CSS opacity, zero JS overhead */}
+      <div className="affordance-hint flex items-center gap-1 pr-1" aria-hidden="true">
         <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-          <rect x="4" y="1" width="4" height="7" rx="2" stroke="currentColor" strokeWidth="1.2" className="text-white/80"/>
-          <line x1="6" y1="3" x2="6" y2="5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" className="text-white/80 animate-pulse"/>
-          <path d="M3 9.5L6 11L9 9.5" stroke="currentColor" strokeWidth="1" strokeLinecap="round" className="text-white/60 animate-bounce"/>
+          <rect x="4" y="1" width="4" height="7" rx="2" stroke="currentColor" strokeWidth="1.2" className="text-white/50"/>
+          <line x1="6" y1="3" x2="6" y2="5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" className="text-white/50"/>
+          <path d="M3 9.5L6 11L9 9.5" stroke="currentColor" strokeWidth="1" strokeLinecap="round" className="text-white/40"/>
         </svg>
       </div>
     </motion.div>
@@ -482,6 +597,7 @@ const MusicContent = forwardRef<HTMLDivElement, { isExpanded?: boolean; media?: 
       exit={{ opacity: 0, scale: 0.9 }}
       transition={{ duration: 0.18, ease: 'easeOut' }}
       className="w-full h-full flex flex-col justify-between px-3 py-2 absolute inset-0 select-none"
+      onClick={(e) => { if (isExpanded) e.stopPropagation(); }}
       {...props}
     >
       {/* Compact View */}
@@ -504,6 +620,12 @@ const MusicContent = forwardRef<HTMLDivElement, { isExpanded?: boolean; media?: 
         </div>
         <div className="flex items-center gap-1 h-full pr-6">
           <TrueAudioVisualizer compact maxHeight={16} />
+        </div>
+        {/* Click to expand chevron affordance (Task 4) */}
+        <div className="absolute right-3 opacity-0 group-hover:opacity-60 transition-opacity duration-200 pointer-events-none text-white/70">
+          <svg width="8" height="8" viewBox="0 0 8 8" fill="none">
+            <path d="M1 2.5L4 5.5L7 2.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
         </div>
       </motion.div>
 
@@ -812,8 +934,11 @@ const CopiedContent = forwardRef<HTMLDivElement, { text?: string }>(({ text, ...
   </motion.div>
 ));
 
-// Feature 16: Shared Content
-const SharedContent = forwardRef<HTMLDivElement, { file: { name: string, size: string, path?: string } | null, onDismiss?: () => void }>(({ file, onDismiss, ...props }, ref) => (
+// Feature 12: Drag & Drop Shared — Functional File Shelf
+// Files dropped IN show here; the row is draggable so users can drag OUT to
+// other apps (Explorer, email, etc.). A dismiss button clears the shelf.
+const SharedContent = forwardRef<HTMLDivElement, { file?: { name: string, size: string, path?: string } | null; onDismiss?: () => void }>(
+  ({ file, onDismiss, ...props }, ref) => (
   <motion.div
     ref={ref}
     initial={{ opacity: 0, scale: 0.9 }}
@@ -831,10 +956,13 @@ const SharedContent = forwardRef<HTMLDivElement, { file: { name: string, size: s
       draggable="true"
       title="Drag to share · × to clear"
       onDragStart={(e) => {
-        e.preventDefault();
-        const api = (window as any).notchXDesktop;
-        if (api && api.startDrag && file) {
-          api.startDrag(file.path || file.name);
+        const api = getDesktopApi();
+        if (api && file && file.path) {
+          e.preventDefault();
+          api.startDrag({ filePath: file.path }).catch(() => {});
+        } else {
+          e.dataTransfer.effectAllowed = 'copy';
+          e.dataTransfer.setData('text/plain', file?.name || 'File');
         }
       }}
     >
@@ -882,6 +1010,7 @@ const WeatherContent = forwardRef<HTMLDivElement, { isExpanded?: boolean, data?:
       exit={{ opacity: 0, y: -10 }}
       transition={{ duration: 0.3 }}
       className="w-full h-full flex flex-col justify-between absolute inset-0"
+      onClick={(e) => { if (isExpanded) e.stopPropagation(); }}
       {...props}
     >
       {/* Compact View */}
@@ -895,6 +1024,12 @@ const WeatherContent = forwardRef<HTMLDivElement, { isExpanded?: boolean, data?:
             <span className="font-bold text-[13px] leading-tight text-white tracking-wide">{temp}</span>
             <span className="text-[9px] font-semibold uppercase text-white/60 leading-none tracking-wider">{city.substring(0, 8)}</span>
           </div>
+        </div>
+        {/* Click to expand chevron affordance (Task 4) */}
+        <div className="opacity-0 group-hover:opacity-60 transition-opacity duration-200 pointer-events-none text-white/70">
+          <svg width="8" height="8" viewBox="0 0 8 8" fill="none">
+            <path d="M1 2.5L4 5.5L7 2.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
         </div>
       </motion.div>
 
@@ -952,71 +1087,148 @@ const WeatherContent = forwardRef<HTMLDivElement, { isExpanded?: boolean, data?:
   );
 });
 
-const CalendarContent = forwardRef<HTMLDivElement, { isExpanded?: boolean }>(({ isExpanded, ...props }, ref) => (
-  <motion.div ref={ref} className="w-full h-full flex flex-col justify-between absolute inset-0 px-4 py-2" {...props}>
-    {/* Compact View */}
-    <motion.div animate={{ opacity: isExpanded ? 0 : 1 }} style={{ pointerEvents: isExpanded ? 'none' : 'auto' }} className="w-full h-full flex items-center gap-2.5 absolute inset-0 px-5">
-      <div className="flex items-center justify-center w-7 h-7 rounded-full bg-gradient-to-tr from-purple-600 to-purple-400 shrink-0 shadow-[0_0_10px_rgba(168,85,247,0.4)] text-white border border-white/10">
-        <CalendarIcon size={14} strokeWidth={2.5} />
-      </div>
-      <span className="font-bold text-[14px] truncate text-white/90 tracking-wide">Design Sync in 5m</span>
-    </motion.div>
+interface CalendarProps {
+  isExpanded?: boolean;
+  tasks?: { id: string, title: string, time: string, isTeams?: boolean, link?: string }[];
+  onAddTask?: (title: string) => void;
+  onLaunchMeeting?: (link: string) => void;
+}
 
-    {/* Expanded View */}
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: isExpanded ? 1 : 0 }} style={{ pointerEvents: isExpanded ? 'auto' : 'none' }} className="absolute inset-0 p-5 flex flex-col">
-      <div className="flex justify-between items-start">
-        <div className="flex flex-col">
-          <h4 className="font-bold text-[19px] leading-tight text-white tracking-wide">Weekly Design Sync</h4>
-          <p className="text-sm text-white/60 font-medium mt-0.5 tracking-wide">10:00 AM - 10:30 AM</p>
-        </div>
-        <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-purple-600 to-purple-400 flex items-center justify-center shrink-0 shadow-[0_0_15px_rgba(168,85,247,0.4)] border border-white/10">
-          <Video size={20} className="text-white" strokeWidth={2.5} />
-        </div>
-      </div>
-      <div className="mt-auto flex gap-3">
-        <button className="flex-1 bg-white hover:bg-gray-100 text-black rounded-xl py-2.5 text-[15px] font-bold transition-all shadow-[0_0_15px_rgba(255,255,255,0.2)] hover:scale-[1.02] active:scale-[0.98] border border-white/20">
-          Join Microsoft Teams
-        </button>
-      </div>
-    </motion.div>
-  </motion.div>
-));
+const CalendarContent = forwardRef<HTMLDivElement, CalendarProps>(
+  ({ isExpanded, tasks = [], onAddTask, onLaunchMeeting, ...props }, ref) => {
+  const [inputVal, setInputVal] = useState('');
 
-const ControlCenterContent = forwardRef<HTMLDivElement, { onToggle?: (type: 'wifi' | 'bluetooth', state: boolean) => void }>((props, ref) => {
-  const [wifiOn, setWifiOn] = useState(true);
-  const [btOn, setBtOn] = useState(true);
+  const currentTask = tasks[0];
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && inputVal.trim()) {
+      e.stopPropagation();
+      if (onAddTask) onAddTask(inputVal.trim());
+      setInputVal('');
+    }
+  };
+
+  const handleButtonClick = (e: React.MouseEvent, link?: string) => {
+    e.stopPropagation();
+    if (onLaunchMeeting && link) {
+      onLaunchMeeting(link);
+    }
+  };
+
+  return (
+    <motion.div ref={ref} className="w-full h-full flex flex-col justify-between absolute inset-0 px-4 py-2" onClick={(e) => { if (isExpanded) e.stopPropagation(); }} {...props}>
+      {/* Compact View */}
+      <motion.div animate={{ opacity: isExpanded ? 0 : 1 }} style={{ pointerEvents: isExpanded ? 'none' : 'auto' }} className="w-full h-full flex items-center gap-2.5 absolute inset-0 px-5">
+        <div className="flex items-center justify-center w-7 h-7 rounded-full bg-gradient-to-tr from-purple-600 to-purple-400 shrink-0 shadow-[0_0_10px_rgba(168,85,247,0.4)] text-white border border-white/10">
+          <CalendarIcon size={14} strokeWidth={2.5} />
+        </div>
+        <span className="font-bold text-[14px] truncate text-white/90 tracking-wide">
+          {currentTask ? `${currentTask.title}` : 'No Tasks Today'}
+        </span>
+        {/* Click to expand chevron affordance (Task 4) */}
+        <div className="opacity-0 group-hover:opacity-60 transition-opacity duration-200 pointer-events-none text-white/70 pl-2">
+          <svg width="8" height="8" viewBox="0 0 8 8" fill="none">
+            <path d="M1 2.5L4 5.5L7 2.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        </div>
+      </motion.div>
+
+      {/* Expanded View */}
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: isExpanded ? 1 : 0 }} style={{ pointerEvents: isExpanded ? 'auto' : 'none' }} className="absolute inset-0 p-5 flex flex-col justify-between h-full">
+        {currentTask ? (
+          <>
+            <div className="flex justify-between items-start">
+              <div className="flex flex-col overflow-hidden max-w-[200px]">
+                <h4 className="font-bold text-[17px] leading-tight text-white tracking-wide truncate">{currentTask.title}</h4>
+                <p className="text-[11px] text-white/60 font-medium mt-0.5 tracking-wide">{currentTask.time}</p>
+              </div>
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-purple-600 to-purple-400 flex items-center justify-center shrink-0 shadow-[0_0_10px_rgba(168,85,247,0.4)] border border-white/10">
+                <Video size={16} className="text-white" strokeWidth={2.5} />
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-2 mt-2">
+              {currentTask.isTeams && (
+                <button
+                  onClick={(e) => handleButtonClick(e, currentTask.link)}
+                  className="w-full bg-white hover:bg-gray-100 text-black rounded-xl py-2 text-xs font-bold transition-all shadow-[0_0_10px_rgba(255,255,255,0.1)] hover:scale-[1.01] active:scale-[0.99] border border-white/20"
+                >
+                  Join Microsoft Teams
+                </button>
+              )}
+              {/* Task Quick Input */}
+              <input
+                type="text"
+                placeholder="Add new task..."
+                value={inputVal}
+                onChange={(e) => setInputVal(e.target.value)}
+                onKeyDown={handleKeyDown}
+                onClick={(e) => e.stopPropagation()}
+                className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-1.5 text-xs text-white placeholder-white/40 focus:outline-none focus:border-purple-400 focus:bg-white/10 transition-colors"
+              />
+            </div>
+          </>
+        ) : (
+          <div className="flex flex-col items-center justify-center h-full gap-3 py-2">
+            <span className="text-xs font-medium text-white/40">No tasks scheduled</span>
+            <input
+              type="text"
+              placeholder="Add new task..."
+              value={inputVal}
+              onChange={(e) => setInputVal(e.target.value)}
+              onKeyDown={handleKeyDown}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs text-white placeholder-white/40 focus:outline-none focus:border-purple-400 focus:bg-white/10 transition-all text-center"
+            />
+          </div>
+        )}
+      </motion.div>
+    </motion.div>
+  );
+});
+
+interface ControlCenterProps {
+  wifi?: boolean;
+  bluetooth?: boolean;
+  dnd?: boolean;
+  onToggleSetting?: (type: 'wifi' | 'bluetooth' | 'dnd', state: boolean) => void;
+}
+
+const ControlCenterContent = forwardRef<HTMLDivElement, ControlCenterProps>(
+  ({ wifi = true, bluetooth = true, dnd = false, onToggleSetting, ...props }, ref) => {
 
   const toggleWifi = (e: React.MouseEvent) => {
     e.stopPropagation();
-    const next = !wifiOn;
-    setWifiOn(next);
-    if (props.onToggle) props.onToggle('wifi', next);
+    if (onToggleSetting) onToggleSetting('wifi', !wifi);
   };
 
   const toggleBt = (e: React.MouseEvent) => {
     e.stopPropagation();
-    const next = !btOn;
-    setBtOn(next);
-    if (props.onToggle) props.onToggle('bluetooth', next);
+    if (onToggleSetting) onToggleSetting('bluetooth', !bluetooth);
+  };
+
+  const toggleDnd = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (onToggleSetting) onToggleSetting('dnd', !dnd);
   };
 
   return (
-    <motion.div ref={ref} className="w-full h-full p-4 flex flex-col absolute inset-0 justify-center" {...props}>
+    <motion.div ref={ref} className="w-full h-full p-4 flex flex-col absolute inset-0 justify-center" onClick={(e) => e.stopPropagation()} {...props}>
       <div className="flex gap-3 h-[80px]">
         {/* WiFi */}
-        <div onClick={toggleWifi} className={`flex-1 ${wifiOn ? 'bg-white/10 hover:bg-white/15' : 'bg-black/20 hover:bg-black/30'} rounded-2xl p-3 flex flex-col gap-2 items-center justify-center cursor-pointer transition-all shadow-[inset_0_1px_2px_rgba(255,255,255,0.1)] border border-white/5 active:scale-95 group`}>
-          <div className={`w-8 h-8 rounded-full ${wifiOn ? 'bg-gradient-to-tr from-blue-600 to-blue-400 text-white shadow-[0_0_10px_rgba(59,130,246,0.4)]' : 'bg-white/10 text-white/50'} flex items-center justify-center group-hover:scale-105 transition-transform`}><Wifi size={14} strokeWidth={2.5} /></div>
-          <span className={`text-[10px] font-bold tracking-wide ${wifiOn ? 'text-white/90' : 'text-white/50'}`}>Wi-Fi</span>
+        <div onClick={toggleWifi} className={`flex-1 ${wifi ? 'bg-white/10 hover:bg-white/15' : 'bg-black/20 hover:bg-black/30'} rounded-2xl p-3 flex flex-col gap-2 items-center justify-center cursor-pointer transition-all shadow-[inset_0_1px_2px_rgba(255,255,255,0.1)] border border-white/5 active:scale-95 group`}>
+          <div className={`w-8 h-8 rounded-full ${wifi ? 'bg-gradient-to-tr from-blue-600 to-blue-400 text-white shadow-[0_0_10px_rgba(59,130,246,0.4)]' : 'bg-white/10 text-white/50'} flex items-center justify-center group-hover:scale-105 transition-transform`}><Wifi size={14} strokeWidth={2.5} /></div>
+          <span className={`text-[10px] font-bold tracking-wide ${wifi ? 'text-white/90' : 'text-white/50'}`}>Wi-Fi</span>
         </div>
         {/* Bluetooth */}
-        <div onClick={toggleBt} className={`flex-1 ${btOn ? 'bg-white/10 hover:bg-white/15' : 'bg-black/20 hover:bg-black/30'} rounded-2xl p-3 flex flex-col gap-2 items-center justify-center cursor-pointer transition-all shadow-[inset_0_1px_2px_rgba(255,255,255,0.1)] border border-white/5 active:scale-95 group`}>
-          <div className={`w-8 h-8 rounded-full ${btOn ? 'bg-gradient-to-tr from-blue-600 to-blue-400 text-white shadow-[0_0_10px_rgba(59,130,246,0.4)]' : 'bg-white/10 text-white/50'} flex items-center justify-center group-hover:scale-105 transition-transform`}><Bluetooth size={14} strokeWidth={2.5} /></div>
-          <span className={`text-[10px] font-bold tracking-wide ${btOn ? 'text-white/90' : 'text-white/50'}`}>Bluetooth</span>
+        <div onClick={toggleBt} className={`flex-1 ${bluetooth ? 'bg-white/10 hover:bg-white/15' : 'bg-black/20 hover:bg-black/30'} rounded-2xl p-3 flex flex-col gap-2 items-center justify-center cursor-pointer transition-all shadow-[inset_0_1px_2px_rgba(255,255,255,0.1)] border border-white/5 active:scale-95 group`}>
+          <div className={`w-8 h-8 rounded-full ${bluetooth ? 'bg-gradient-to-tr from-blue-600 to-blue-400 text-white shadow-[0_0_10px_rgba(59,130,246,0.4)]' : 'bg-white/10 text-white/50'} flex items-center justify-center group-hover:scale-105 transition-transform`}><Bluetooth size={14} strokeWidth={2.5} /></div>
+          <span className={`text-[10px] font-bold tracking-wide ${bluetooth ? 'text-white/90' : 'text-white/50'}`}>Bluetooth</span>
         </div>
         {/* DND */}
-        <div onClick={(e) => e.stopPropagation()} className="flex-1 bg-white/10 hover:bg-white/15 rounded-2xl p-3 flex flex-col gap-2 items-center justify-center cursor-pointer transition-all shadow-[inset_0_1px_2px_rgba(255,255,255,0.1)] border border-white/5 active:scale-95 group">
-          <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-indigo-600 to-purple-500 text-white flex items-center justify-center shadow-[0_0_10px_rgba(79,70,229,0.4)] group-hover:scale-105 transition-transform"><Moon size={14} strokeWidth={2.5} className="fill-current" /></div>
-          <span className="text-[10px] font-bold tracking-wide text-white/90">DND</span>
+        <div onClick={toggleDnd} className={`flex-1 ${dnd ? 'bg-white/10 hover:bg-white/15' : 'bg-black/20 hover:bg-black/30'} rounded-2xl p-3 flex flex-col gap-2 items-center justify-center cursor-pointer transition-all shadow-[inset_0_1px_2px_rgba(255,255,255,0.1)] border border-white/5 active:scale-95 group`}>
+          <div className={`w-8 h-8 rounded-full ${dnd ? 'bg-gradient-to-tr from-indigo-600 to-purple-500 text-white shadow-[0_0_10px_rgba(79,70,229,0.4)]' : 'bg-white/10 text-white/50'} flex items-center justify-center group-hover:scale-105 transition-transform`}><Moon size={14} strokeWidth={2.5} className="fill-current" /></div>
+          <span className={`text-[10px] font-bold tracking-wide ${dnd ? 'text-white/90' : 'text-white/50'}`}>DND</span>
         </div>
       </div>
     </motion.div>
@@ -1063,6 +1275,12 @@ const VoiceChatContent = forwardRef<HTMLDivElement, { isExpanded?: boolean }>(({
         <motion.div animate={{ height: [4, 12, 4] }} transition={{ repeat: Infinity, duration: 0.8 }} className="w-1.5 bg-emerald-400 rounded-full shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
         <motion.div animate={{ height: [8, 16, 8] }} transition={{ repeat: Infinity, duration: 1.2 }} className="w-1.5 bg-emerald-400 rounded-full shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
         <motion.div animate={{ height: [6, 10, 6] }} transition={{ repeat: Infinity, duration: 1.0 }} className="w-1.5 bg-emerald-400 rounded-full shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
+      </div>
+      {/* Click to expand chevron affordance (Task 4) */}
+      <div className="opacity-0 group-hover:opacity-60 transition-opacity duration-200 pointer-events-none text-white/70 pl-2">
+        <svg width="8" height="8" viewBox="0 0 8 8" fill="none">
+          <path d="M1 2.5L4 5.5L7 2.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
       </div>
     </motion.div>
 
@@ -1123,6 +1341,12 @@ const NotificationStackContent = forwardRef<HTMLDivElement, { isExpanded?: boole
       </div>
       <div className="w-6 h-6 rounded-full bg-white/10 text-white flex items-center justify-center text-xs font-bold border border-white/10 shadow-inner">
         3
+      </div>
+      {/* Click to expand chevron affordance (Task 4) */}
+      <div className="opacity-0 group-hover:opacity-60 transition-opacity duration-200 pointer-events-none text-white/70 pl-2">
+        <svg width="8" height="8" viewBox="0 0 8 8" fill="none">
+          <path d="M1 2.5L4 5.5L7 2.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
       </div>
     </motion.div>
 

@@ -11,12 +11,14 @@ interface BatteryData {
   is_charging: boolean;
 }
 
+const ALERT_STATES: IslandState[] = ['battery', 'notification', 'volume'];
+
 export default function App() {
   const [islandState, setIslandState] = useState<IslandState>('idle');
   // UX Architecture: Non-Destructive Priority Queue
   // A ref-based stack avoids stale closure bugs in setTimeout callbacks.
   // secondaryState (useState) is the RENDER value — updated whenever the queue changes.
-  const stateQueueRef = useRef<{state: IslandState, expanded: boolean}[]>([]);
+  const stateQueueRef = useRef<IslandState[]>([]);
   const [secondaryState, setSecondaryState] = useState<IslandState | null>(null);
   const [isExpanded, setIsExpanded] = useState(false);
   const constraintsRef = useRef<HTMLDivElement>(null);
@@ -33,6 +35,8 @@ export default function App() {
 
   const [weatherData, setWeatherData] = useState<WeatherData | null>(null);
   const [sharedFile, setSharedFile] = useState<{ name: string, size: string, path?: string } | null>(null);
+  const [systemSettings, setSystemSettings] = useState<{ wifi: boolean, bluetooth: boolean, dnd: boolean }>({ wifi: true, bluetooth: true, dnd: false });
+  const [localTasks, setLocalTasks] = useState<{ id: string, title: string, time: string, isTeams?: boolean, link?: string }[]>([]);
 
   const [alignment, setAlignment] = useState<AlignPreset>('top-center');
 
@@ -41,6 +45,7 @@ export default function App() {
   const mouseVelocityRef = useRef({ x: 0, y: 0, lastTime: Date.now() });
 
   const [mediaData, setMediaData] = useState<MediaData | null>(null);
+  const hasWarnedLowBatteryRef = useRef(false);
 
   // Stable refs for event listeners to prevent re-mounting
   const islandStateRef = useRef<IslandState>(islandState);
@@ -51,6 +56,11 @@ export default function App() {
 
   const actualBatteryRef = useRef<number>(actualBattery);
   useEffect(() => { actualBatteryRef.current = actualBattery; }, [actualBattery]);
+
+  const isExpandedRef = useRef<boolean>(isExpanded);
+  useEffect(() => { isExpandedRef.current = isExpanded; }, [isExpanded]);
+
+  const clickTimeoutRef = useRef<any>(null);
 
   // Clean up global timeouts and intervals on unmount to prevent memory leaks
   useEffect(() => {
@@ -73,14 +83,15 @@ export default function App() {
         const velocityY = (e.clientY - lastY) / dt;
         const velocityX = (e.clientX - lastX) / dt;
 
-        // Ghost if moving into the top 20px "titlebar zone" (unless we are interacting with the island)
-        if ((e.clientY < 20 || (e.clientY < 40 && (Math.abs(velocityY) > 0.8 || Math.abs(velocityX) > 2.0))) && islandStateRef.current === 'idle') {
+        // Ghost if moving fast (any axis) within 40px of top — covers both
+        // rapid upward strokes AND horizontal tab-bar navigation
+        if (e.clientY < 40 && (Math.abs(velocityY) > 0.8 || Math.abs(velocityX) > 2.0) && islandStateRef.current === 'idle') {
           setIsGhosted(true);
           if (ghostTimeout) clearTimeout(ghostTimeout);
           ghostTimeout = setTimeout(() => {
             setIsGhosted(false);
-          }, 1200);
-        } else if (e.clientY > 60) {
+          }, 800); // Snap back quickly once user settles on a tab
+        } else if (e.clientY > 80) {
           setIsGhosted(false);
           if (ghostTimeout) clearTimeout(ghostTimeout);
         }
@@ -121,18 +132,18 @@ export default function App() {
     // Transient alerts (battery, notification, volume) push the CURRENT
     // context onto a stack so it can be restored when the alert reverts,
     // instead of permanently overwriting it.
-    const TRANSIENT_STATES: IslandState[] = ['battery', 'notification', 'volume', 'device', 'copied', 'shared', 'dropzone'];
-    if (TRANSIENT_STATES.includes(s) && !TRANSIENT_STATES.includes(islandStateRef.current)) {
-      if (islandStateRef.current !== 'idle') {
-        stateQueueRef.current = [{ state: islandStateRef.current, expanded: isExpanded }, ...stateQueueRef.current].slice(0, 4);
-      }
+    if (ALERT_STATES.includes(s) && !ALERT_STATES.includes(islandStateRef.current)) {
+      // Push the current non-alert state so we can restore it later
+      stateQueueRef.current = [islandStateRef.current, ...stateQueueRef.current].slice(0, 4);
     } else if (s === 'idle') {
+      // Clearing to idle flushes the entire queue
       stateQueueRef.current = [];
-    } else if (!TRANSIENT_STATES.includes(s)) {
+    } else if (!ALERT_STATES.includes(s)) {
+      // Any deliberate non-alert navigation clears the queue too
       stateQueueRef.current = [];
     }
     // Sync render value to queue head
-    setSecondaryState(stateQueueRef.current[0]?.state ?? null);
+    setSecondaryState(stateQueueRef.current[0] ?? null);
 
     const isTemporary = ['volume', 'battery', 'shared', 'device', 'dropzone', 'copied'].includes(s);
     if (!isTemporary && s !== 'timer' && timerRef.current) {
@@ -156,8 +167,8 @@ export default function App() {
         const restored = stateQueueRef.current[0];
         if (restored) {
           stateQueueRef.current = stateQueueRef.current.slice(1);
-          setSecondaryState(stateQueueRef.current[0]?.state ?? null);
-          changeState(restored.state, restored.expanded);
+          setSecondaryState(stateQueueRef.current[0] ?? null);
+          changeState(restored);
         } else if (timerRef.current) {
           changeState('timer', false);
         } else if (mediaDataRef.current && mediaDataRef.current.playbackStatus === 'Playing') {
@@ -173,21 +184,33 @@ export default function App() {
     }
   }, [resizeForState]);
 
-  const toggleExpand = useCallback(() => {
-    if (islandState === 'idle') {
-      changeState('control_center', false);
-    } else if (islandState === 'control_center') {
-      changeState('weather', true);
-    } else if (islandState === 'weather') {
-      changeState('calendar', true);
-    } else if (islandState === 'calendar') {
-      changeState('idle', false);
-    } else if (EXPANDABLE_STATES.includes(islandState)) {
-      const next = !isExpanded;
-      setIsExpanded(next);
-      resizeForState(islandState, next);
+  const handlePillClick = useCallback(() => {
+    if (clickTimeoutRef.current) {
+      clearTimeout(clickTimeoutRef.current);
+      clickTimeoutRef.current = null;
+      // Double click -> Toggle expand
+      if (EXPANDABLE_STATES.includes(islandStateRef.current)) {
+        const next = !isExpandedRef.current;
+        setIsExpanded(next);
+        resizeForState(islandStateRef.current, next);
+      }
+    } else {
+      clickTimeoutRef.current = setTimeout(() => {
+        clickTimeoutRef.current = null;
+        if (isExpandedRef.current) {
+          // Single click on expanded view collapses it back to compact
+          setIsExpanded(false);
+          resizeForState(islandStateRef.current, false);
+          return;
+        }
+        // Cycle to the right: idle -> music -> weather -> calendar -> idle
+        const cycle = ['idle', 'music', 'weather', 'calendar'] as IslandState[];
+        const idx = cycle.indexOf(islandStateRef.current);
+        const nextState = idx === -1 ? 'idle' : cycle[(idx + 1) % cycle.length];
+        changeState(nextState, false);
+      }, 220); // 220ms delay is standard and extremely responsive
     }
-  }, [isExpanded, islandState, changeState, resizeForState]);
+  }, [resizeForState, changeState]);
 
   const cycleSimulationState = useCallback(() => {
     const SIMULATION_STATES: IslandState[] = [
@@ -232,6 +255,20 @@ export default function App() {
       api.getWeather().then(d => d && setWeatherData(d)).catch((e) => { console.error('Failed to fetch weather data:', e); });
     }
 
+    // Sync initial system settings (WiFi, Bluetooth, DND)
+    if (api.getSettings) {
+      api.getSettings().then((s: any) => {
+        if (s) setSystemSettings(s);
+      }).catch((e) => { console.error('Failed to get system settings:', e); });
+    }
+
+    // Sync initial calendar tasks
+    if (api.getTasks) {
+      api.getTasks().then((t: any) => {
+        if (t) setLocalTasks(t);
+      }).catch((e) => { console.error('Failed to get tasks:', e); });
+    }
+
     // States from which music can take over (transient/non-critical)
     const MUSIC_PREEMPTIBLE = ['idle', 'volume', 'battery', 'device', 'copied', 'shared', 'dropzone', 'notification'];
 
@@ -244,8 +281,17 @@ export default function App() {
       if (mediaHealthTimeoutRef.current) clearTimeout(mediaHealthTimeoutRef.current);
 
       setMediaData((prev: MediaData | null) => {
-        // Bail out of React re-renders if the media payload is functionally identical
-        if (prev && m && prev.title === m.title && prev.playbackStatus === m.playbackStatus && prev.position === m.position) return prev;
+        if (prev && m) {
+          // If the view is collapsed, skip triggering a React state update/re-render
+          // for minor position changes during playback.
+          if (!isExpandedRef.current && prev.title === m.title && prev.playbackStatus === m.playbackStatus) {
+            prev.position = m.position;
+            return prev;
+          }
+          if (prev.title === m.title && prev.playbackStatus === m.playbackStatus && prev.position === m.position) {
+            return prev;
+          }
+        }
         return m;
       });
 
@@ -284,11 +330,17 @@ export default function App() {
     // Battery priority
     const u1 = api.onBatteryUpdate((d: any) => {
       setActualBattery(prev => prev !== d.percentage ? d.percentage : prev);
+      
+      if (d.is_charging || d.percentage >= 20) {
+        hasWarnedLowBatteryRef.current = false;
+      }
+
       if (initialSet && wasCharging !== d.is_charging) {
         wasCharging = d.is_charging;
         changeState('battery', true, 2000); // show battery state, revert after 2s
-      } else if (d.percentage < 20 && !d.is_charging && islandStateRef.current === 'idle') {
-        changeState('battery', false, 2000); // Warn low battery
+      } else if (d.percentage < 20 && !d.is_charging && !hasWarnedLowBatteryRef.current && !ALERT_STATES.includes(islandStateRef.current)) {
+        hasWarnedLowBatteryRef.current = true;
+        changeState('battery', false, 2000); // Warn low battery once
       }
     });
 
@@ -343,8 +395,12 @@ export default function App() {
       dragCounterRef.current = 0;
       if (e.dataTransfer && e.dataTransfer.files.length > 0) {
         const file = e.dataTransfer.files[0];
-        // Now holds the file in the "Shelf" until dismissed, instead of just saying "shared"
-        setSharedFile({ name: file.name, size: (file.size / 1024 / 1024).toFixed(1) + 'MB', path: file.path });
+        // Now holds the file in the "Shelf" until dismissed, storing the absolute path for drag-out
+        setSharedFile({
+          name: file.name,
+          size: (file.size / 1024 / 1024).toFixed(1) + 'MB',
+          path: (file as any).path || ''
+        });
         changeState('shared', false); // No auto-revert! The user must swipe or drag it out.
       } else {
         if (timerRef.current) changeState('timer', false);
@@ -413,24 +469,6 @@ export default function App() {
             dragMomentum={false}
             dragElastic={0.1}
             onDragStart={() => setAlignment('custom')}
-            drag="x"
-            dragDirectionLock
-            onDragEnd={(e, info) => {
-              if (Math.abs(info.velocity.x) > 500 || Math.abs(info.offset.x) > 100) {
-                // Swipe detected
-                if (info.offset.x > 0) {
-                  // Swipe Right -> Next Widget
-                  if (islandState === 'weather') changeState('calendar');
-                  else if (islandState === 'calendar') changeState('music');
-                  else if (islandState === 'music') changeState('idle');
-                } else {
-                  // Swipe Left -> Prev Widget
-                  if (islandState === 'idle') changeState('music');
-                  else if (islandState === 'music') changeState('calendar');
-                  else if (islandState === 'calendar') changeState('weather');
-                }
-              }
-            }}
             animate={{ x: 0, y: 0 }}
             transition={{ type: 'spring', stiffness: 300, damping: 30 }}
           >
@@ -438,7 +476,8 @@ export default function App() {
               isGhosted={isGhosted}
               activeState={islandState}
               secondaryState={secondaryState}
-              onClick={toggleExpand}
+              onClick={handlePillClick}
+              onDoubleClick={handlePillClick}
               isExpanded={isExpanded}
               focusMode={false}
               cameraActive={false}
@@ -458,16 +497,43 @@ export default function App() {
                 }
               }}
               scaleModifier={1}
-              yOffset={isGhosted ? -60 : 0}
+              yOffset={0}
               theme={islandTheme}
               actualBattery={actualBattery}
               designMode={false}
               systemStats={systemStats}
               weatherData={weatherData}
               sharedFile={sharedFile}
-              onToggleNetwork={(type, state) => {
+              systemSettings={systemSettings}
+              onToggleSetting={(type, state) => {
                 const api = getDesktopApi();
-                if (api && api.toggleNetwork) api.toggleNetwork(type, state);
+                if (!api) return;
+                if (type === 'wifi' || type === 'bluetooth') {
+                  api.toggleNetwork(type, state);
+                  setSystemSettings(prev => ({ ...prev, [type]: state }));
+                } else if (type === 'dnd') {
+                  api.toggleDnd(state);
+                  setSystemSettings(prev => ({ ...prev, dnd: state }));
+                }
+              }}
+              calendarTasks={localTasks}
+              onAddCalendarTask={(title) => {
+                const api = getDesktopApi();
+                if (!api) return;
+                const newTask = {
+                  id: Date.now().toString(),
+                  title,
+                  time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' (Today)',
+                  isTeams: title.toLowerCase().includes('teams') || title.toLowerCase().includes('sync'),
+                  link: title.toLowerCase().includes('teams') || title.toLowerCase().includes('sync') ? 'msteams://' : ''
+                };
+                api.addTask(newTask).then((updated: any) => {
+                  if (updated) setLocalTasks(updated);
+                }).catch(() => {});
+              }}
+              onLaunchMeeting={(link) => {
+                const api = getDesktopApi();
+                if (api && api.launchMeeting) api.launchMeeting(link);
               }}
               mediaData={mediaData}
               timerSecs={timerSecs}

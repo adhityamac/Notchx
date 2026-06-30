@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('notchXDesktop', {
   getPosition: () => ipcRenderer.invoke('overlay:getPosition'),
   setPosition: (pos) => ipcRenderer.invoke('overlay:setPosition', pos),
   setClickThrough: (on) => ipcRenderer.invoke('overlay:setClickThrough', on),
+  startDrag: (fileInfo) => ipcRenderer.invoke('drag:start', fileInfo),
 
   // ── Simulator → Notch state sync ─────────────────────────────────────────
   updateState: (payload) => ipcRenderer.invoke('state:update', payload),
@@ -28,6 +29,11 @@ contextBridge.exposeInMainWorld('notchXDesktop', {
   // ── Network & Weather ───────────────────────────────────────────────────
   getWeather: () => ipcRenderer.invoke('weather:get'),
   toggleNetwork: (type, state) => ipcRenderer.invoke('network:toggle', { type, state }),
+  getSettings: () => ipcRenderer.invoke('system:getSettings'),
+  toggleDnd: (state) => ipcRenderer.invoke('system:toggleDnd', state),
+  getTasks: () => ipcRenderer.invoke('calendar:getTasks'),
+  addTask: (task) => ipcRenderer.invoke('calendar:addTask', task),
+  launchMeeting: (link) => ipcRenderer.invoke('calendar:launchMeeting', link),
   getMediaSessions: () => ipcRenderer.invoke('media:get'),
   toggleMediaPlayPause: () => ipcRenderer.invoke('media:playpause'),
   nextMediaTrack: () => ipcRenderer.invoke('media:next'),
@@ -35,7 +41,6 @@ contextBridge.exposeInMainWorld('notchXDesktop', {
   setMediaShuffle: (state) => ipcRenderer.invoke('media:shuffle', state),
   setMediaRepeat: (mode) => ipcRenderer.invoke('media:repeat', mode),
   seekMediaTrack: (posSeconds) => ipcRenderer.invoke('media:seek', posSeconds),
-  startDrag: (fileName) => ipcRenderer.send('drag-start', fileName),
 
   // ── Push listeners ────────────────────────────────────────────────────────
   onMediaKey: (cb) => {
